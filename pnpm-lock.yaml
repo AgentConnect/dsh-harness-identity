@@ -534,6 +534,9 @@ importers:
       '@deepseek-ai/dsh-loader-smoke':
         specifier: workspace:*
         version: link:../packages/test-support/loader-smoke
+      '@deepseek-ai/dsh-mcp-client':
+        specifier: workspace:*
+        version: link:../packages/mcp/mcp-client
       '@deepseek-ai/dsh-lsp':
         specifier: workspace:*
         version: link:../packages/lsp/lsp
@@ -5593,7 +5596,7 @@ importers:
         specifier: link:../../../vendor/schemastery
         version: link:../../../vendor/schemastery
       '@modelcontextprotocol/sdk':
-        specifier: ^1.12.0
+        specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
       zod:
         specifier: ^4.4.3

@@ -50,6 +50,20 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
 | `reconnect.maxDelayMs` | 两者 | 否 | 退避上限（毫秒）；同时也是重置尝试预算所需的正常运行时长（默认 30000） |
 | `reconnect.maxAttempts` | 两者 | 否 | 每次中断期间连续失败尝试次数上限，超出后彻底放弃（默认 10） |
 
+## CIMD 机器认证
+
+Streamable HTTP 可显式配置 `authentication.mode: cimd-client-credentials`。`connectionId` 是持久本地连接标识，`identityRef` 为公共身份的 `{storeId, identityId, did}`，`policyRef` 指向管理员预授权政策，`requestedScopes` 必须是非空最小权限集合。`stateRoot` 是绝对路径的受保护凭据目录；`encryptionKeyRef` 引用 Host 凭据中的 32 字节 base64url 加密 key，YAML 不保存实际 key 或 Token。可选 `issuer` 在多个 AS 中固定唯一选择；`discoveryCacheMs` 控制发现缓存（默认 300000，最大 3600000），`tokenRetry` 控制有界 Token 尝试与退避。
+
+Host 必须提供实现 `bindProtocolConsumer(ctx)` 的公共身份服务和凭据引用服务。身份服务核对真实 consumer Context、显式政策与已发布身份，返回绑定目标的本地 signer lease。服务缺失、身份未发布、政策拒绝、元数据不兼容或 grant 错误都会阻断机器认证。此模式拒绝配置中的受管 Authorization、Cookie、DPoP、Poppy-Session Header。
+
+Host 专用 `MachineAuthenticationSession` 导出提供脱敏 `status()` 与显式断开的 `dispose(true)`，只管理它自己的连接，不返回 Token。严格 JSON 拒绝重复成员、无效 UTF-8、BOM，元数据要求精确 JSON MIME；携带凭据的重定向不能改变目标。
+
+公开发现不带凭据。HTTPS 为每次请求固定已验证公网 DNS 答案并建立新 TLS socket，拒绝重定向，限制 DNS、网络和读取等待。resource 必须与元数据精确一致；AS 必须明确支持 CIMD、client_credentials、private_key_jwt、ES256。每次 Token 请求使用本地新断言和精确 issuer audience；没有浏览器、授权码、动态注册、匿名认证或 refresh 回退。
+
+Token 为有界正寿命的 opaque Bearer。scope 不可超出请求且必须满足所需集合。身份、发布 key/version、issuer、resource、发现摘要、scope 与政策代次共同隔离凭据。每次物理发送检查不可变连接快照、身份许可与持久代次；同进程并发 single-flight，持久写使用 Linux 内核锁、AES-GCM 和原子替换，实际持锁进程执行 rename，避免旧 writer 在禁用之后复活。重启重新申请 Token，不延长旧 Token 的寿命。
+
+资源 401 隔离 Token 并使当前操作失败，下次明确操作可重取；403 不扩权，业务调用未知结果不自动重放。机器模式不传 SDK OAuth provider。实际 SDK 为 1.29.0，支持的 lane 是 Streamable HTTP initialize / 2025-11-25，未实现 2026 server/discover。认证本身不向模型加入文本或凭据，工具 schema 和结果呈现维持已有 Model Experience。
+
 ## 工具命名
 
 每个 MCP 工具都有两个名称：通过 `tools/call` 在协议上传送的原始 MCP 名称，以及公开名称 `mcp__<serverName>__<rawName>`，后者注册到 `ctx.tools`。公开名称会规范化为 DeepSeek 函数名称约定（64 个字符、`[A-Za-z0-9_-]`）；如果替换或截断改变名称，就会追加 `(serverName, rawName)` 的确定性 12 位十六进制 hash，确保不同工具绝不会折叠为同一个名称。名称是 `(serverName, rawName)` 的纯函数：连接顺序、重新同步和其他服务器永远不会重命名工具。
@@ -75,6 +89,8 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
 | 服务 | 用途 |
 |---|---|
 | `ctx.tools` | 注册／注销 MCP 工具 |
+| `ctx.get('anpIdentity')` | 机器模式：将已安装 consumer 绑定至明确批准的本地 signer lease |
+| `ctx.get('credentials')` | 机器模式：读取受保护的 Token-store 加密 key |
 
 ## 模型体验
 
@@ -108,6 +124,8 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
 
 ## 已知限制与暂缓事项
 
+- **机器凭据存储仅实现 Linux**：依赖 flock 与受保护的 Host 加密凭据；其他平台对此机器模式明确失败，stdio 和显式 Header 保持原有支持。
+- **机器断开先本地 fence**：`MachineAuthenticationSession.dispose(true)` 先持久禁用。已验证撤销端点收到新断言与缓存 Token，失败或未知在途签发报告 remote_revocation_unconfirmed；重新启用的管理 UI 尚待实现。
 - **只桥接 MCP 的工具能力**：资源和提示词没有 harness 消费接口，暂缓实现。
 - **启动超时继承自 MCP SDK**：DSH 尚未公开连接／发现超时。每次 initialize 请求或分页 `tools/list` 请求都使用 SDK 默认的 60 秒，因此在初始同步完成期间，无响应的 server 或 cursor chain 可能同时延迟激活与 teardown。
 - **重连在传输关闭时触发**：崩溃的 stdio 子进程会触发重连；Streamable HTTP 失败通过每次请求以及 SDK 传输自身的 SSE（Server-Sent Events）流恢复机制暴露，因此不可达的 HTTP 服务器会按调用重试，而非由 supervisor 重新 spawn。

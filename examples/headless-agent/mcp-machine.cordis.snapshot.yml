@@ -1,0 +1,52 @@
+# The production MCP plugin and SDK run unchanged. The driver supplies only the
+# external DNS/HTTPS fixture; the local provider and model are explicit fixtures.
+- id: persistence
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: './.sessions'
+    compression: none
+
+- id: agent-spine
+  name: '@deepseek-ai/dsh-agent-spine-demo'
+  config:
+    agents:
+      - id: main
+        provider: machine-keyless
+        model: machine-keyless
+        cwd: !!js process.cwd()
+    workspaceContext: false
+    includeRuntimeContext: false
+    includeHarnessIdentity: false
+    persona: 'Read the machine identity through the configured MCP tool.'
+    skills:
+      enabled: false
+    toolBash: false
+    toolJobs: false
+    goals: false
+
+- id: machine-host-fixture
+  name: './tests/fixtures/mcp-machine/host.ts'
+
+- id: machine-model-fixture
+  name: './tests/fixtures/mcp-machine/model.ts'
+
+- id: machine-mcp
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: machine
+    transport: streamable-http
+    url: 'https://resource.example/mcp'
+    failOnStartupError: true
+    reconnect:
+      enabled: false
+    authentication:
+      mode: cimd-client-credentials
+      connectionId: example-machine
+      identityRef:
+        storeId: fixture-store
+        identityId: fixture-agent
+        did: 'did:web:agent.example'
+      policyRef: approved-machine-example
+      requestedScopes: [agent.self.read]
+      stateRoot: !!js process.cwd() + '/.machine-credentials'
+      encryptionKeyRef: MCP_EXAMPLE_STORE_KEY

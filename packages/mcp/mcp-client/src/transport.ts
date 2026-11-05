@@ -25,10 +25,11 @@ function buildChildEnv(extra: Record<string, string>): Record<string, string> {
 /**
  * Create an MCP transport from the resolved plugin config.
  *
+ * @param authorizedFetch - Optional Host authentication hook; the SDK OAuth provider remains absent.
  * @param config - Resolved plugin config discriminated on `transport`.
  * @returns A connected-ready MCP Transport (stdio or Streamable HTTP).
  */
-export function createTransport(config: Config): Transport {
+export function createTransport(config: Config, authorizedFetch?: typeof fetch): Transport {
   switch (config.transport) {
     case 'stdio':
       return new StdioClientTransport({
@@ -44,7 +45,7 @@ export function createTransport(config: Config): Transport {
       // object, so the cast records only that widening.
       return new StreamableHTTPClientTransport(
         new URL(config.url),
-        { requestInit: { headers: config.headers } },
+        { requestInit: { headers: config.headers }, ...(authorizedFetch ? { fetch: authorizedFetch } : {}) },
       ) as Transport
   }
 }

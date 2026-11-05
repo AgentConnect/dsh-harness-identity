@@ -27,6 +27,16 @@ pnpm exec vitest run --config vitest.e2e.config.ts packages/e2b/e2b/tests/compos
 
 The overlay creates the same absolute cwd inside the sandbox, but it does not upload or mount the host workspace. File and Bash mutations exist only in E2B; Cordis, model calls, agent/session state, session logs, skills, and SDK buffers remain on the host. The composition kills its sandbox on timeout and disposal. It is a provider-composition POC, not a whole-harness migration or a workspace-sync feature.
 
+## Keyless machine MCP example
+
+[`mcp-machine.cordis.snapshot.yml`](mcp-machine.cordis.snapshot.yml) runs the real headless agent, MCP client plugin, machine authentication session, encrypted credential store and MCP SDK. Its explicit fixtures replace the model, local identity provider and external DNS/HTTPS replies; no remote API, browser, user authorization-code, DCR or refresh-token flow runs. The fixture AS verifies an ES256 client assertion and issues a synthetic resource-bound Token. This proves assembled machine-only behavior, not independent authorization-server interoperability or production key custody.
+
+```sh
+node node_modules/vitest/vitest.mjs run --config vitest.snapshot.config.ts examples/headless-agent/tests/mcp-machine.snapshot.ts
+```
+
+The checked-in session transcript records one successful identity read, a sanitized 401 failure without automatic business-call replay, and a separate read that acquires a new machine Token. The wire summary asserts two client-credentials exchanges and three actual tool calls; neither access tokens nor assertions enter the model-visible transcript. The [fixture driver](tests/fixtures/mcp-machine/driver.ts) is runnable through the shared source/lib Loader launcher; lib mode requires the normal built workspace artifacts. The successful machine credential-store scenario currently requires Linux `flock`; other platforms retain the machine plugin's explicit unsupported-storage failure policy. Only Linux replay is validated here.
+
 ## Advanced configuration
 
 [`advanced.cordis.yml`](advanced.cordis.yml) adds Code Mode and the Cordis tools to the test composition.
