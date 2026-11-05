@@ -69,6 +69,21 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 After startup, the server's tools appear as `mcp__<serverName>__<tool>` — try a prompt that uses one. If the initial connection fails, the harness still starts but no tools from that server appear, and an error is logged; set `failOnStartupError: true` to make a startup failure abort the harness instead.
 
+<a id="cimd-machine-authentication"></a>
+### CIMD machine authentication
+
+Streamable HTTP can explicitly select `authentication.mode: cimd-client-credentials`. Provide a published `identityRef`, approved `policyRef`, nonempty minimum `requestedScopes`, absolute protected `stateRoot`, and `encryptionKeyRef` naming a Host credential with a 32-byte base64url encryption key. An optional exact `issuer` selects one AS when resource metadata lists several. The shared local identity service binds the installed consumer Context to its policy and supplies only a target-bound signer lease; private identity keys remain local.
+
+`connectionId` is a persistent Host-wide logical connection identifier, distinct from `serverName`. Different Agents may reuse a server name with different connection ids. A versioned process registry rejects the same connection id in any scope, app root, state directory or loaded package copy before discovery or signing. This conservative Host contract retains ownership until quiescent disposal, including failed initialization. An opaque owner token prevents an old disposer from releasing the next owner. Reloading the same logical connection reuses its configured id; a restarted process still reads the original persistent disabled fence. Multiple processes sharing one protected directory and id operate the same logical connection and its generation, not independent Agent connections.
+
+Discovery reads public protected-resource and AS metadata without credentials, fixes one exact resource and issuer, and requires explicit CIMD, client_credentials, private_key_jwt and ES256 support. The only Token exchange uses a fresh local assertion with the exact issuer audience. There is no browser, authorization-code, DCR, anonymous-authentication or refresh fallback. Managed Host, Authorization, Proxy-Authorization, Cookie, DPoP and Poppy-Session headers are rejected in this mode.
+
+Machine HTTPS uses the existing Host `proxyRouteFor` authority. This profile implements validated, DNS-pinned direct connections only: an active proxy route fails with `proxy_egress_unsupported` before identity admission or signing; it never silently connects directly. A NO_PROXY destination still passes the direct address/TLS checks. Existing stdio and non-machine HTTP proxy behavior retains its original path. Each direct request pins a public DNS answer to a new verified TLS socket, bounds DNS/upload/response waits and sizes, rejects credential redirects, and validates exact JSON MIME, duplicate names, UTF-8 and BOM.
+
+Tokens remain opaque Bearer values with bounded expiry and sufficient requested scopes. The complete connection/identity/publication/issuer/resource/discovery/scope/policy partition isolates encrypted storage and single-flight acquisition. Each Token task captures one immutable binding, and commit and physical send recheck its generation and local permission. Linux kernel locking serializes updates; the lock-owning worker writes, fsyncs and renames encrypted data itself. Killing that worker cannot let an old parent revive a disabled fence, and broken stdin is contained. Disconnect stops admission before the first await, persists the disabled fence, aborts and drains tasks, and independently reports trusted-endpoint revocation as confirmed or remote_revocation_unconfirmed. A resource 401 fails the current operation without replay; only the next explicit operation may acquire a new Token.
+
+The Host-only `MachineAuthenticationSession` export offers sanitized `status()` and `dispose(true)` for its own connection. Authentication adds no model text or credentials; tool schemas, scoped registration, attachments and result rendering use the existing paths below. The pinned SDK is 1.29.0; this mode uses Streamable HTTP initialize and protocol 2025-11-25, without a 2026 server/discover implementation.
+
 ### Tool naming and coexistence
 
 The model sees each tool under a stable server-qualified name: `mcp__<serverName>__<rawName>`, for example `mcp__github__create_issue` — the same naming shape Claude Code and Codex use. Names stay stable while the server keeps the same tool name, so session history and permission rules survive restarts and reloads. Two servers can both offer a tool named `search` and coexist as `mcp__github__search` and `mcp__web__search`.
@@ -143,6 +158,7 @@ The child environment starts from the subprocess seam's `scrubbedParentEnv()` �
 Read these pages when the package-level contract is not enough. They move from the shared tool registry to the bridge's design evidence and worked example configurations.
 
 - [Tools subsystem reference](../../../docs/subsystems/tools.md) — the `ToolRuntime` and `ctx.tools.register()` contract that receives the bridged tools.
+- [CIMD machine authentication decision](../../../.agents/notes/implemented/feature/2026-11-06-mcp-cimd-machine-authentication.md) — local authority, Host-wide connection identity and direct egress.
 - [MCP client plugin Agent Note](../../../.agents/notes/implemented/feature/2026-07-07-mcp-client-plugin.md) — the naming invariants, discovery and execution design, alternatives, and consequences.
 - [Canonical tool output contract Agent Note](../../../.agents/notes/implemented/architecture/2026-07-20-canonical-tool-output-contract.md) — how MCP results map into the canonical tool-output contract.
 - [Third-party memory MCP guide](../../../docs/user/guide/mcp-memory.md) — three memory-server overlays using this package.
@@ -188,6 +204,8 @@ Append-only; newly visible content follows the reusable request prefix and does 
 
 These limits describe what you cannot do with this plugin and when it needs operational attention. They are current package constraints, not a comparison with other MCP clients or a task backlog.
 
+- **Machine credential storage is Linux-only** — the kernel-lock implementation requires flock and a protected Host encryption credential; other platforms reject this mode.
+- **Machine proxy transport is unsupported** — an active Host proxy route fails closed; it is not bypassed or replaced with an unpinned fetch. A re-enable management UI and additional wire lanes remain deferred.
 - **Tools are the only bridged MCP capability** — Resources and Prompts have no harness consumer mechanism and are deferred.
 - **Startup and discovery timeouts are inherited from the MCP SDK** — the plugin exposes no connection or discovery timeout; each `initialize` and paginated `tools/list` request uses the SDK's 60-second request default, so an unresponsive server or cursor chain can delay both activation and teardown while the initial synchronization settles.
 - **Reconnect triggers on transport close** — a crashed stdio child fires it; Streamable HTTP failures surface per request through the SDK transport's own recovery, so an unreachable HTTP server is retried per call rather than respawned by the supervisor.

@@ -13,6 +13,11 @@
  * @module @deepseek-ai/dsh-mcp-client
  */
 
+import { isAbsolute } from 'node:path'
+import { MachineAuthenticationSession } from './machine-auth.ts'
+import { createTransport } from './transport.ts'
+import { machineUrl } from './machine-http.ts'
+import type { MachineAuthentication } from './machine-types.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { scopeOf } from '@deepseek-ai/dsh-scope'
@@ -21,6 +26,9 @@ import { RECONNECT_DEFAULTS, resolveReconnectPolicy, startConnection } from './c
 import type { ReconnectConfig } from './connection.ts'
 // Side-effect type import: declaration-merges `ctx.tools` onto Context.
 import type {} from '@deepseek-ai/dsh-tools'
+
+export { MachineAuthenticationSession }
+export type { MachineAuthentication, MachineTarget, MachineSignerLease, MachineIdentityClient, MachineIdentityService } from './machine-types.ts'
 
 export type { McpResult } from './tools.ts'
 export type { ReconnectConfig, ResolvedReconnectPolicy } from './connection.ts'
@@ -84,6 +92,8 @@ export interface StreamableHttpConfig {
   serverName: string
   /** MCP endpoint URL. */
   url: string
+  /** Explicit local CIMD machine authentication; omission retains existing headers behavior. */
+  authentication?: MachineAuthentication
   /** Additional headers attached to MCP requests. */
   headers: Record<string, string>
   /** Per-tool-call timeout in milliseconds. */
@@ -127,6 +137,18 @@ export const Config = z.union([
     serverName: z.string().required().pattern(SERVER_NAME_PATTERN),
     url: z.string().required(),
     headers: z.dict(String).default({}),
+    authentication: z.object({
+      mode: z.const('cimd-client-credentials'), connectionId: z.string().required(),
+      identityRef: z.object({ storeId: z.string().required(), identityId: z.string().required(), did: z.string().required() }),
+      policyRef: z.string().required(), requestedScopes: z.array(String).required(), issuer: z.string(),
+      stateRoot: z.string().required(), encryptionKeyRef: z.string().required(),
+      discoveryCacheMs: z.number().min(1000).max(3600000).default(300000),
+      tokenRetry: z.object({
+        maxAttempts: z.number().min(1).max(5).step(1).default(3),
+        initialDelayMs: z.number().min(1).max(30000).default(250),
+        maxDelayMs: z.number().min(1).max(30000).default(5000),
+      }),
+    }),
     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
     failOnStartupError: z.boolean().default(false),
     reconnect: Reconnect,
@@ -167,10 +189,28 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     return () => void names.delete(config.serverName)
   }, 'mcp-client.serverName')
 
+  let machine: MachineAuthenticationSession | undefined
+  if (config.transport === 'streamable-http' && config.authentication) {
+    const auth = config.authentication
+    machineUrl(config.url)
+    if (!isAbsolute(auth.stateRoot) || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(auth.encryptionKeyRef)
+      || auth.mode !== 'cimd-client-credentials' || !auth.requestedScopes.length
+      || auth.requestedScopes.some(scope => !/^[\x21\x23-\x5b\x5d-\x7e]{1,128}$/u.test(scope))
+      || Object.keys(config.headers).some(key => /^(host|authorization|proxy-authorization|cookie|poppy-session|dpop)$/iu.test(key))) {
+      throw new Error('invalid_machine_authentication')
+    }
+    const authentication = new MachineAuthenticationSession(ctx, auth, config.url)
+    machine = authentication
+    ctx.effect(() => () => authentication.dispose(), 'mcp-client.machine-authentication')
+  }
+
   // The supervisor owns the client/transport generations, the reconnect
   // loop, and the live tool registrations; disposal stops reconnection,
   // quiesces in-flight work, and unregisters the current generation.
-  const connection = startConnection(ctx, config, reconnect)
+  const authentication = machine
+  const connection = authentication
+    ? startConnection(ctx, config, reconnect, () => createTransport(config, authentication.fetch))
+    : startConnection(ctx, config, reconnect)
 
   ctx.effect(() => {
     return () => connection.dispose()

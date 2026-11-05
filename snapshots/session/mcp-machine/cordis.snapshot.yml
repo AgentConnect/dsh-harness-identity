@@ -1,0 +1,56 @@
+# Only model generation is replayed from this scenario's recorded Session.
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  disabled: true
+
+- id: plugin-package-inventory-deepseek
+  disabled: true
+
+- id: session-title-llm
+  disabled: true
+
+- id: sandbox
+  name: '@deepseek-ai/dsh-sandbox-local'
+  config:
+    runnerCommand:
+      - bash
+      - -c
+      - while [ "$1" != "--" ]; do shift; done; shift; exec "$@"
+      - passthrough-runner
+    runnerFailureSignatures:
+      - 'passthrough-runner: profile rejected'
+
+- insert:
+    - id: llm-replay
+      name: '@deepseek-ai/dsh-llm-replay'
+      config:
+        providers:
+          - id: deepseek-official
+            name: DeepSeek
+            models:
+              - id: deepseek-v4-flash
+
+    - id: machine-fixture
+      name: './machine-fixture.mjs'
+
+    - id: machine-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      inject: [tools, anpIdentity]
+      config:
+        serverName: machine
+        transport: streamable-http
+        url: 'https://resource.example/mcp'
+        failOnStartupError: true
+        reconnect:
+          enabled: false
+        authentication:
+          mode: cimd-client-credentials
+          connectionId: snapshot-machine
+          identityRef:
+            storeId: fixture-store
+            identityId: fixture-agent
+            did: 'did:web:agent.example'
+          policyRef: snapshot-approved-machine
+          requestedScopes: [agent.self.read]
+          stateRoot: !!js dshHomePath('machine-credentials')
+          encryptionKeyRef: SNAPSHOT_MCP_CIPHER

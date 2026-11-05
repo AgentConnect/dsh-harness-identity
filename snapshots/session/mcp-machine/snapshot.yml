@@ -1,0 +1,9 @@
+version: 1
+scenario: mcp-machine
+profile: headless
+composition: mcp-machine
+recording: authored
+platform: linux
+header:
+  class: mcp-machine
+  pin: true

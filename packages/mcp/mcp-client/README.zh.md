@@ -69,6 +69,21 @@ kind: "package-reference"
 
 启动后，服务器的工具会以 `mcp__<serverName>__<tool>` 形式出现——试着用一条提示词调用其中一个。如果初始连接失败，harness 仍会启动，但该服务器的工具不会出现，并会记录一条错误；设置 `failOnStartupError: true` 可让启动失败改为中止 harness。
 
+<a id="cimd-machine-authentication"></a>
+### CIMD 机器认证
+
+Streamable HTTP 可显式选择 `authentication.mode: cimd-client-credentials`，提供已发布的 `identityRef`、已批准的 `policyRef`、非空最小 `requestedScopes`、绝对保护目录 `stateRoot`，以及引用 Host 凭据中 32 字节 base64url 加密 key 的 `encryptionKeyRef`。可选精确 `issuer` 在资源列出多个 AS 时固定唯一选择。公共本地身份服务核对已安装 consumer Context 与政策，只授予目标绑定 signer lease，身份私钥保留本机。
+
+`connectionId` 是持久的全 Host 逻辑连接标识，与 `serverName` 不同。不同 Agent 可使用不同 connectionId 复用服务器名称。版本化进程 registry 在发现或签名前拒绝任何 scope、app root、state目录或 package 副本中的重复 id。这一保守 Host 契约持续到 quiescent disposal，包含初始化失败；opaque owner token 防止旧 disposer 删除新 owner。重载同一逻辑连接沿用原配置 id，进程重启仍读取原持久禁用 fence。多个进程共享同一保护目录和 id 表示同一个逻辑连接及代次，不表示各自独立的 Agent 连接。
+
+公开发现不带凭据读取资源和 AS 元数据，固定唯一精确 resource/issuer，并要求明确 CIMD、client_credentials、private_key_jwt 和 ES256 支持。唯一 Token 交换使用本地新断言和精确 issuer audience；没有浏览器、授权码、DCR、匿名认证或 refresh 回退。此模式拒绝受管 Host、Authorization、Proxy-Authorization、Cookie、DPoP、Poppy-Session Header。
+
+机器 HTTPS 使用既有 Host `proxyRouteFor` 权威政策。当前 profile 只实现验证后 DNS pin 的 direct 连接；active proxy route 在身份准入或签名前报 proxy_egress_unsupported，不会暗中直连。NO_PROXY 目标仍执行 direct 地址/TLS 检查。既有 stdio 和非机器 HTTP 代理路径保持原行为。每次 direct 请求固定已验证公网 DNS 到新 TLS socket，限制 DNS/upload/response 等待和大小，拒绝凭据重定向，并校验精确 JSON MIME、重复成员、UTF-8、BOM。
+
+Token 是有界寿命且满足请求 scope 的 opaque Bearer。完整 connection/identity/publication/issuer/resource/discovery/scope/policy 分区隔离加密存储与 single-flight。每个 Token 任务固定不可变 binding，提交和物理发送重新检查代次与本地许可。Linux 内核锁串行持久变更，由持锁 worker 自己写入、fsync、rename 密文；holder 死亡不能让旧父操作复活禁用 fence，stdin 失败也被包含。断开在第一个 await 前停止 admission，持久禁用、取消并 drain 任务，独立报告可信撤销端点结果 confirmed 或 remote_revocation_unconfirmed。资源 401 使当前操作失败而不重放，下一明确操作才可重取。
+
+Host 专用 `MachineAuthenticationSession` 提供自身连接的脱敏 status() 和 dispose(true)。认证不向模型添加文本或凭据；工具 schema、scope、附件和结果呈现继续沿用下文机制。SDK 精确固定 1.29.0，此模式使用 Streamable HTTP initialize / 2025-11-25，未实现 2026 server/discover。
+
 ### 工具命名与共存
 
 模型看到每个工具都带有稳定的服务器限定名称：`mcp__<serverName>__<rawName>`，例如 `mcp__github__create_issue`——与 Claude Code 和 Codex 使用的命名形态相同。只要服务器保持相同的工具名称，名称就保持不变，因此会话历史与权限规则在重启和重载后仍然有效。两个服务器可以同时提供名为 `search` 的工具，分别以 `mcp__github__search` 和 `mcp__web__search` 共存。
@@ -143,6 +158,7 @@ kind: "package-reference"
 当包级约定不够用时阅读以下页面。它们从共享工具注册表逐步进入桥接的设计证据与可运行的示例配置。
 
 - [工具子系统参考](../../../docs/subsystems/tools.zh.md)——接收已桥接工具的 `ToolRuntime` 与 `ctx.tools.register()` 约定。
+- [CIMD 机器认证决定](../../../.agents/notes/implemented/feature/2026-11-06-mcp-cimd-machine-authentication.zh.md)：本地许可、全 Host 连接身份和 direct 出站。
 - [MCP 客户端插件 Agent Note](../../../.agents/notes/implemented/feature/2026-07-07-mcp-client-plugin.zh.md)——命名不变式、发现与执行设计、备选方案与后果。
 - [规范工具输出约定 Agent Note](../../../.agents/notes/implemented/architecture/2026-07-20-canonical-tool-output-contract.zh.md)——MCP 结果如何映射进规范工具输出约定。
 - [第三方记忆 MCP 指南](../../../docs/user/guide/mcp-memory.zh.md)——使用本包的三份记忆服务器 overlay。
@@ -188,6 +204,8 @@ kind: "package-reference"
 
 这些限制说明你无法用本插件做什么、以及何时需要运维注意。它们是当前包约束，不是与其他 MCP 客户端的对比，也不是任务积压。
 
+- **机器凭据存储仅实现 Linux**：内核锁需要 flock 与受保护 Host 加密凭据；其他平台对此模式明确拒绝。
+- **机器代理传输尚未支持**：active Host proxy route 失败关闭，不绕过代理，也不换成未 pin 的 fetch。重新启用管理 UI 与其他 wire lane 尚待实现。
 - **只桥接 MCP 的工具能力**——Resources 与 Prompts 没有 harness 消费机制，暂缓实现。
 - **启动与发现超时继承自 MCP SDK**——插件不暴露连接或发现超时；每次 `initialize` 与分页 `tools/list` 请求都使用 SDK 默认的 60 秒请求超时，因此无响应的服务器或 cursor chain 在初始同步完成期间可能同时延迟激活与 teardown。
 - **重连在传输关闭时触发**——崩溃的 stdio 子进程会触发重连；Streamable HTTP 失败按请求经 SDK 传输自身的恢复机制暴露，因此不可达的 HTTP 服务器会按调用重试，而非由 supervisor 重新 spawn。

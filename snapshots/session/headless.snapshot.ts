@@ -78,6 +78,12 @@ function snapshotMode(value: string | undefined): SnapshotMode {
 const mode = snapshotMode(process.env.DSH_SNAPSHOT)
 const RUNTIME_WORKSPACE_ENTRIES = ['.agents', '.dsh', '.snapshot-patches'] as const
 
+function skipSnapshotPlatform(platform: SnapshotManifest['platform'], host: NodeJS.Platform, pwshAvailable: boolean): boolean {
+  return platform === 'linux' && host !== 'linux'
+    || platform === 'posix' && host === 'win32'
+    || platform === 'pwsh' && !pwshAvailable
+}
+
 interface JsonObject {
   [key: string]: unknown
 }
@@ -632,6 +638,18 @@ async function verifyHeaders(scenario: HeadlessScenario, actualLogs: readonly Se
 }
 
 describe('headless recorded-session snapshots', () => {
+  it('runs Linux-only scenarios only on Linux while retaining POSIX and PowerShell applicability', () => {
+    expect(skipSnapshotPlatform('linux', 'linux', false)).toBe(false)
+    expect(skipSnapshotPlatform('linux', 'darwin', false)).toBe(true)
+    expect(skipSnapshotPlatform('linux', 'win32', true)).toBe(true)
+    expect(skipSnapshotPlatform('posix', 'linux', false)).toBe(false)
+    expect(skipSnapshotPlatform('posix', 'darwin', false)).toBe(false)
+    expect(skipSnapshotPlatform('posix', 'win32', true)).toBe(true)
+    expect(skipSnapshotPlatform('pwsh', 'linux', true)).toBe(false)
+    expect(skipSnapshotPlatform('pwsh', 'win32', true)).toBe(false)
+    expect(skipSnapshotPlatform('pwsh', 'darwin', false)).toBe(true)
+    expect(skipSnapshotPlatform(undefined, 'win32', false)).toBe(false)
+  })
   it('gives every composition and header class exactly one current-writer pin', () => {
     for (const scenario of scenarios) {
       expect(ownerOf(scenario), `${scenario.name}: composition owner`).toBeDefined()
@@ -871,8 +889,7 @@ describe('headless recorded-session snapshots', () => {
   })
 
   for (const scenario of scenarios) {
-    const skipped = scenario.manifest.platform === 'posix' && process.platform === 'win32'
-      || scenario.manifest.platform === 'pwsh' && !hasPwsh
+    const skipped = skipSnapshotPlatform(scenario.manifest.platform, process.platform, hasPwsh)
       || mode === 'record' && scenario.manifest.recording === 'authored'
       || mode === 'record' && scenario.manifest.sessionFormat !== undefined
     const scenarioTest = skipped ? it.skip : mode === 'replay' ? it.concurrent : it

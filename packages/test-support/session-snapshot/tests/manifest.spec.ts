@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { parseSnapshotManifest, writesCurrentSessionFixtures } from '../src/manifest.ts'
 
 describe('snapshot manifest', () => {
+  it.each(['linux', 'posix', 'pwsh'] as const)('parses the explicit %s host requirement', (platform) => {
+    expect(parseSnapshotManifest(`version: 1\nprofile: headless\nplatform: ${platform}\n`).platform).toBe(platform)
+  })
   it('parses an owning scenario', () => {
     expect(parseSnapshotManifest('version: 1\nprofile: headless\n')).toEqual({
       version: 1,
@@ -172,7 +175,7 @@ describe('snapshot manifest', () => {
     ['version: 1\nprofile: acp\nheader:\n  class: base\n  promptChanges: 1.5\n', 'manifest.header.promptChanges must be a non-negative integer'],
     ['version: 1\nprofile: acp\nheader:\n  class: base\n  systemPromptSource: ../bad\n', 'manifest.header.systemPromptSource must be a lower-kebab-case name or corpus-relative path'],
     ['version: 1\nprofile: acp\nreplay:\n  override: false\n', 'manifest.replay.override must equal true'],
-    ['version: 1\nprofile: acp\nplatform: windows\n', 'manifest.platform must be posix or pwsh'],
+    ['version: 1\nprofile: acp\nplatform: windows\n', 'manifest.platform must be linux, posix, or pwsh'],
     ['version: 1\nprofile: acp\npermission: root\n', 'manifest.permission must be read-only, workspace-write, or danger-full-access'],
     ['version: 1\nprofile: acp\nenvironment:\n  lower: value\n', 'manifest.environment must map uppercase environment names to strings'],
     ['version: 1\nprofile: acp\nworkspace: {}\n', 'manifest.workspace must not be empty'],

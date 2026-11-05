@@ -78,6 +78,21 @@ const mode = process.env.DSH_SNAPSHOT ?? 'replay'
 const recording = mode === 'record'
 const refreshing = mode === 'refresh'
 const sessionWriteMode = recording ? 'record' : refreshing ? 'refresh' : 'replay'
+
+function skipSdkScenario(manifest: Pick<SnapshotManifest, 'platform' | 'recording' | 'sessionFormat'>, record: boolean, host: NodeJS.Platform): boolean {
+  return manifest.platform === 'linux' && host !== 'linux'
+    || record && (manifest.recording === 'authored' || manifest.sessionFormat !== undefined)
+}
+
+it('applies SDK Linux-only manifests without changing authored or retained-generation recording rules', () => {
+  expect(skipSdkScenario({ platform: 'linux' }, false, 'linux')).toBe(false)
+  expect(skipSdkScenario({ platform: 'linux' }, false, 'darwin')).toBe(true)
+  expect(skipSdkScenario({ platform: 'linux' }, false, 'win32')).toBe(true)
+  expect(skipSdkScenario({ recording: 'authored' }, true, 'linux')).toBe(true)
+  expect(skipSdkScenario({ recording: 'authored' }, false, 'win32')).toBe(false)
+  expect(skipSdkScenario({ recording: 'live', sessionFormat: { version: 1, coverage: ['adjacent-migration'] } }, true, 'linux')).toBe(true)
+  expect(skipSdkScenario({ recording: 'live' }, true, 'win32')).toBe(false)
+})
 const RUNTIME_WORKSPACE_ENTRIES = [
   '.agents',
   '.child-dsh',
@@ -781,10 +796,7 @@ async function verifyHeaders(
 
 describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
   for (const scenario of sdkScenarios) {
-    const scenarioTest = recording
-      && (scenario.manifest.recording === 'authored' || scenario.manifest.sessionFormat !== undefined)
-      ? it.skip
-      : it
+    const scenarioTest = skipSdkScenario(scenario.manifest, recording, process.platform) ? it.skip : it
     scenarioTest(`${mode}s ${scenario.name} through dsh --profile sdk`, async () => {
       const scenarioDir = scenario.dir
       const retained = scenario.manifest.sessionFormat !== undefined

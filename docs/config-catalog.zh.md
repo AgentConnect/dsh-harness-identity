@@ -1511,7 +1511,7 @@ export interface LspLocalServerConfig {
 
 ## `@deepseek-ai/dsh-mcp-client`
 
-需要：`tools`
+Requires: `tools`
 
 ```ts config-catalog
 /** Configuration for one stdio or Streamable HTTP MCP server. */
@@ -1555,6 +1555,8 @@ export interface StreamableHttpConfig {
   serverName: string
   /** MCP endpoint URL. */
   url: string
+  /** Explicit local CIMD machine authentication; omission retains existing headers behavior. */
+  authentication?: MachineAuthentication
   /** Additional headers attached to MCP requests. */
   headers: Record<string, string>
   /** Per-tool-call timeout in milliseconds. */
@@ -1576,9 +1578,47 @@ export interface ReconnectConfig {
   /** Consecutive failed attempts per outage before giving up for good (default 10). */
   maxAttempts?: number
 }
+
+/** Durable configuration for the client-credentials profile. */
+export interface MachineAuthentication {
+  /** Selects the local CIMD client-credentials flow without interactive fallbacks. */
+  mode: 'cimd-client-credentials'
+  /** Persistent Host-wide connection identifier, unique across every Agent scope and independent of the displayed server name. */
+  connectionId: string
+  /** Exact identity reference from the shared local identity authority. */
+  identityRef: {
+    /** Local encrypted Store identifier. */
+    storeId: string
+    /** Identity identifier within that Store. */
+    identityId: string
+    /** Exact published DID. */
+    did: string
+  }
+  /** Administrator-approved policy reference in the shared identity service. */
+  policyRef: string
+  /** Nonempty minimum scope set required by this connection. */
+  requestedScopes: string[]
+  /** Exact preselected AS issuer; required when resource metadata lists several. */
+  issuer?: string
+  /** Absolute protected directory for this connection's encrypted credentials. */
+  stateRoot: string
+  /** Host credential reference containing the base64url 32-byte encryption key. */
+  encryptionKeyRef: string
+  /** Maximum discovery snapshot lifetime in milliseconds; default 300000, maximum 3600000. */
+  discoveryCacheMs?: number
+  /** Bounded Token acquisition retry policy; every retry creates a fresh assertion. */
+  tokenRetry?: {
+    /** Maximum attempts in one acquisition, including the first; default 3, maximum 5. */
+    maxAttempts: number
+    /** Initial backoff delay in milliseconds; default 250. */
+    initialDelayMs: number
+    /** Maximum local retry delay in milliseconds; default 5000. */
+    maxDelayMs: number
+  }
+}
 ```
 
-来源：[`packages/mcp/mcp-client/src/index.ts:98`](../packages/mcp/mcp-client/src/index.ts)
+来源： [`packages/mcp/mcp-client/src/index.ts:108`](../packages/mcp/mcp-client/src/index.ts)
 
 <a id="deepseek-aidsh-message-feedback"></a>
 

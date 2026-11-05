@@ -1,0 +1,27 @@
+# Explicit fixture providers leave the shipped profile, registry, Agent scope,
+# attachment executor and MCP SDK in place. Machine requests use direct egress.
+- insert:
+    - id: machine-fixture
+      name: './machine-fixture.mjs'
+
+    - id: machine-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      inject: [tools, anpIdentity]
+      config:
+        serverName: machine
+        transport: streamable-http
+        url: 'https://resource.example/mcp'
+        failOnStartupError: true
+        reconnect:
+          enabled: false
+        authentication:
+          mode: cimd-client-credentials
+          connectionId: snapshot-machine
+          identityRef:
+            storeId: fixture-store
+            identityId: fixture-agent
+            did: 'did:web:agent.example'
+          policyRef: snapshot-approved-machine
+          requestedScopes: [agent.self.read]
+          stateRoot: !!js dshHomePath('machine-credentials')
+          encryptionKeyRef: SNAPSHOT_MCP_CIPHER

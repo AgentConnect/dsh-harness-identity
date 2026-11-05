@@ -202,6 +202,8 @@ export interface Scenario {
    * test is skipped on Windows; its fixtures stay guarded on every platform.
    */
   posixOnly?: boolean
+  /** Whether the run requires Linux; committed fixtures remain guarded on every host. */
+  linuxOnly?: boolean
   /**
    * Whether the scenario boots a composition that needs a usable `pwsh`
    * (the pwsh-tool-turn scenario). The run test is skipped when the suite's
@@ -214,7 +216,8 @@ export interface Scenario {
 /**
  * Whether a scenario's run test is skipped for this mode and host: record mode
  * skips authored (non-`recorded`) scenarios and explicit historical Session
- * generations, {@link Scenario.posixOnly} scenarios skip on Windows, and
+ * generations, {@link Scenario.linuxOnly} scenarios skip outside Linux,
+ * {@link Scenario.posixOnly} scenarios skip on Windows, and
  * {@link Scenario.pwshOnly} scenarios skip when the caller's `hasPwsh` probe
  * is false.
  *
@@ -232,6 +235,7 @@ export function scenarioSkipped(
   hasPwsh?: boolean,
 ): boolean {
   if (recording && (!scenario.recorded || scenario.sessionFormat !== undefined)) return true
+  if (scenario.linuxOnly === true && platform !== 'linux') return true
   if (scenario.posixOnly === true && platform === 'win32') return true
   return scenario.pwshOnly === true && hasPwsh !== true
 }

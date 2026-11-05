@@ -3,11 +3,13 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { expect, it } from 'vitest'
 import {
   defineAcpSnapshotSuite,
   parseSnapshotManifest,
   type Scenario,
   type SnapshotSuiteOptions,
+  type SnapshotManifest,
 } from '@deepseek-ai/dsh-session-snapshot'
 
 const corpusDir = fileURLToPath(new URL('./', import.meta.url))
@@ -46,6 +48,21 @@ function localScenarioSource(source: string | undefined): string | undefined {
   return source?.includes('/') === false ? source : undefined
 }
 
+function platformFlags(platform: SnapshotManifest['platform']): Pick<Scenario, 'linuxOnly' | 'posixOnly' | 'pwshOnly'> {
+  return {
+    ...(platform === 'linux' ? { linuxOnly: true } : {}),
+    ...(platform === 'posix' ? { posixOnly: true } : {}),
+    ...(platform === 'pwsh' ? { pwshOnly: true } : {}),
+  }
+}
+
+it('maps ACP Linux, POSIX and PowerShell manifest requirements to the shared run filter', () => {
+  expect(platformFlags('linux')).toEqual({ linuxOnly: true })
+  expect(platformFlags('posix')).toEqual({ posixOnly: true })
+  expect(platformFlags('pwsh')).toEqual({ pwshOnly: true })
+  expect(platformFlags(undefined)).toEqual({})
+})
+
 const scenarios: Scenario[] = controllerCases.map((controller) => {
   const manifestPath = join(corpusDir, controller.name, 'snapshot.yml')
   const manifest = parseSnapshotManifest(readFileSync(manifestPath, 'utf8'), manifestPath)
@@ -64,8 +81,7 @@ const scenarios: Scenario[] = controllerCases.map((controller) => {
     headerClass: manifest.header.class,
     ...(systemPromptSource === undefined ? {} : { systemPromptSource }),
     ...(toolSchemasSource === undefined ? {} : { toolSchemasSource }),
-    ...(manifest.platform === 'posix' ? { posixOnly: true } : {}),
-    ...(manifest.platform === 'pwsh' ? { pwshOnly: true } : {}),
+    ...platformFlags(manifest.platform),
     ...(controller.configPath === undefined ? {} : { configPath: controller.configPath }),
     ...manifest.permission === undefined && manifest.environment === undefined
       ? {}

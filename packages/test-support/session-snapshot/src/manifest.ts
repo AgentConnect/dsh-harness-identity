@@ -36,7 +36,7 @@ export interface SnapshotReplayManifest {
 }
 
 /** Host requirements for a scenario's process-level controller. */
-export type SnapshotPlatform = 'posix' | 'pwsh'
+export type SnapshotPlatform = 'linux' | 'posix' | 'pwsh'
 
 /** Deployment permission preset selected before the scenario starts. */
 export type SnapshotPermission = 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -144,7 +144,7 @@ export function writesCurrentSessionFixtures(
 
 const PROFILES = new Set<SnapshotProfile>(['headless', 'sdk', 'acp', 'web'])
 const RECORDINGS = new Set<SnapshotRecording>(['live', 'authored'])
-const PLATFORMS = new Set<SnapshotPlatform>(['posix', 'pwsh'])
+const PLATFORMS = new Set<SnapshotPlatform>(['linux', 'posix', 'pwsh'])
 const PERMISSIONS = new Set<SnapshotPermission>(['read-only', 'workspace-write', 'danger-full-access'])
 const SESSION_FORMAT_COVERAGE = new Set<SnapshotSessionFormatCoverage>([
   'multi-hop',
@@ -291,7 +291,7 @@ export function parseSnapshotManifest(source: string, path = 'snapshot.yml'): Sn
     let platform: SnapshotPlatform | undefined
     if (root.platform !== undefined) {
       if (typeof root.platform !== 'string' || !PLATFORMS.has(root.platform as SnapshotPlatform)) {
-        throw new Error('manifest.platform must be posix or pwsh')
+        throw new Error('manifest.platform must be linux, posix, or pwsh')
       }
       platform = root.platform as SnapshotPlatform
     }
