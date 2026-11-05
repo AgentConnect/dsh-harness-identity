@@ -27,6 +27,8 @@ Use `dsh-fs-local` to read, list, atomically write, and edit files on the host f
 
 Mount this backend when a composition needs `ctx.fs` backed by the real host filesystem and accepts a process-local implementation. The common path is explicit: load the backend, give it a base directory, and the model-facing tools (`dsh-tool-fs`) or your own plugins can read, write, and edit files.
 
+In Electron, this backend uses the built-in `original-fs` for physical paths, metadata, streams and writes. An ASAR archive is a regular host file; its virtual members are not physical targets. Electron's ordinary `fs` and module/asset loaders retain their ASAR behavior. The backend fails to load if that physical filesystem is unavailable. [Electron documents why virtual ASAR metadata cannot provide kernel identities and timestamps](https://www.electronjs.org/docs/latest/tutorial/asar-archives#fake-stat-information-of-fsstat).
+
 ### When to choose it
 
 Choose `fs-local` for ordinary host-file access in a single process. Choose [`fs-sandbox`](../fs-sandbox/README.md) when a session's writes and edits must be confined to its workspace and temp roots — it extends this backend and adds only the mode fence. Choose [`fs-e2b`](../../e2b/fs-e2b/README.md) when files must live in a remote execution world shared with subprocesses. `config.cwd` is a resolution default, not a containment boundary: absolute paths and `..` escape it.

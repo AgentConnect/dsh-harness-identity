@@ -27,6 +27,8 @@ kind: "package-reference"
 
 当组合需要由真实宿主文件系统支撑的 `ctx.fs`、且可以接受进程本地实现时，挂载此后端。常用路径是显式的：加载后端、给出基准目录，然后面向模型的工具（`dsh-tool-fs`）或你自己的插件即可读取、写入和编辑文件。
 
+在 Electron 中，此后端使用内置 `original-fs` 处理物理路径、元数据、流及写入。ASAR 归档是普通宿主文件，其虚拟成员不是物理目标。Electron 常规 `fs` 与模块、资产加载器保留原有 ASAR 行为。物理文件系统不可用时后端拒绝加载。[Electron 文档说明了虚拟 ASAR 元数据无法提供内核身份和时间戳的原因](https://www.electronjs.org/docs/latest/tutorial/asar-archives#fake-stat-information-of-fsstat)。
+
 ### 何时选择
 
 普通宿主文件访问请选择 `fs-local`。会话的写入与编辑必须限制在工作区与临时根目录内时，选择 [`fs-sandbox`](../fs-sandbox/README.zh.md)——它扩展此后端，只增加模式围栏。文件必须位于与子进程共享的远程执行世界时，选择 [`fs-e2b`](../../e2b/fs-e2b/README.zh.md)。`config.cwd` 只是解析默认值，不是约束边界：绝对路径与 `..` 都可以逃逸它。

@@ -6,13 +6,23 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { createReadStream } from 'node:fs'
-import { chmod, link, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises'
+import * as nodeFs from 'node:fs'
+import * as nodeFsPromises from 'node:fs/promises'
 import type { BigIntStats, Dirent, Stats } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { TextDecoder } from 'node:util'
 import { FsError, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import { copyFileDaclWin32, replaceFileWin32 } from './win32.ts'
+
+// Physical identities, metadata and publication must use the same kernel filesystem under Electron.
+const physicalFs = process.versions.electron
+  ? process.getBuiltinModule('original-fs') as typeof nodeFs | undefined
+  : nodeFs
+if (!physicalFs) throw new Error('fs-local: Electron original-fs is unavailable')
+const { createReadStream } = physicalFs
+const { chmod, link, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } = process.versions.electron
+  ? physicalFs.promises
+  : nodeFsPromises
 
 const BINARY_SAMPLE_BYTES = 8192
 // Bound one non-abortable FileHandle.read so cancellation is observed between chunks.
