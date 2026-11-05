@@ -13,6 +13,7 @@ interface Row {
   generation: number
   active: boolean
   partition: string
+  activationId?: string
   retryNotBefore?: number
   iv?: string
   tag?: string
@@ -27,6 +28,31 @@ export class MachineConnectionStore {
     if (!/^[A-Za-z0-9_-]{1,128}$/u.test(connectionId)) throw new Error('invalid_connection_id')
     this.file = join(root, createHash('sha256').update(connectionId).digest('hex') + '.json')
     this.lock = this.file + '.lock'
+  }
+  /** Read the durable enablement fence without decrypting a token.
+   * @returns The persisted generation and active flag, or no record.
+   */
+  async state(): Promise<{ generation: number; active: boolean } | undefined> {
+    const row = await this.read()
+    return row && { generation: row.generation, active: row.active }
+  }
+  /** Explicit management enablement after fresh identity and target authorization.
+   * @param generation - Disabled generation observed by the management operation.
+   * @param partition - Newly verified identity, target and policy partition.
+   * @param authorize - Recheck current manager, caller and signer permission inside the lock.
+   * @param activationId - Unique operation ownership retained for conditional rollback.
+   * @returns The new active generation, containing no previous token.
+   */
+  async enable(generation: number, partition: string, authorize: () => Promise<void>, activationId = randomBytes(16).toString('hex')): Promise<number> {
+    if (!/^[A-Za-z0-9-]{16,64}$/u.test(activationId)) throw new Error('invalid_activation_id')
+    return this.transaction(async (write) => {
+      const row = await this.read()
+      if (!row || row.active || row.generation !== generation) throw new Error('connection_generation_changed')
+      await authorize()
+      const next = generation + 1
+      await write({ schema: 1, generation: next, active: true, partition, activationId })
+      return next
+    })
   }
   /** Read the persistent fence, creating the connection only when absent.
    * @param partition - Full identity/resource/key/policy partition.
@@ -117,13 +143,18 @@ export class MachineConnectionStore {
   async clear(generation: number, partition: string): Promise<void> {
     await this.transaction(async (write) => {
       const row = await this.read(); this.check(row, generation, partition)
-      await write({ schema: 1, generation, active: true, partition })
+      await write({ schema: 1, generation, active: true, partition, ...(row.activationId ? { activationId: row.activationId } : {}) })
     })
   }
-  /** Persist the disabled fence before any in-flight result can commit. */
-  async disable(): Promise<void> {
+  /** Persist the disabled fence before any in-flight result can commit.
+   * @param expectedGeneration - Optional exact generation for conditional invalidation.
+   * @param activationId - Optional enable operation id; a stale rollback cannot disable its successor.
+   */
+  async disable(expectedGeneration?: number, activationId?: string): Promise<void> {
     await this.transaction(async (write) => {
       const row = await this.read()
+      if (expectedGeneration !== undefined && (!row || row.generation !== expectedGeneration)) return
+      if (activationId !== undefined && row?.activationId !== activationId) return
       await write({ schema: 1, generation: (row?.generation ?? 0) + 1, active: false, partition: row?.partition ?? '' })
     })
   }
@@ -136,6 +167,7 @@ export class MachineConnectionStore {
       if (info.size > 131072 || (info.mode & 0o077) !== 0) throw new Error('credential_store_unavailable')
       const row = JSON.parse(await readFile(this.file, 'utf8')) as Row
       if (row.schema !== 1 || !Number.isSafeInteger(row.generation) || typeof row.active !== 'boolean' || typeof row.partition !== 'string') throw new Error()
+      if (row.activationId !== undefined && (typeof row.activationId !== 'string' || !/^[A-Za-z0-9-]{16,64}$/u.test(row.activationId))) throw new Error()
       return row
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined

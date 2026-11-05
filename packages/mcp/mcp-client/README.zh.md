@@ -72,7 +72,7 @@ kind: "package-reference"
 <a id="cimd-machine-authentication"></a>
 ### CIMD 机器认证
 
-Streamable HTTP 可显式选择 `authentication.mode: cimd-client-credentials`，提供已发布的 `identityRef`、已批准的 `policyRef`、非空最小 `requestedScopes`、绝对保护目录 `stateRoot`，以及引用 Host 凭据中 32 字节 base64url 加密 key 的 `encryptionKeyRef`。可选精确 `issuer` 在资源列出多个 AS 时固定唯一选择。公共本地身份服务核对已安装 consumer Context 与政策，只授予目标绑定 signer lease，身份私钥保留本机。
+省略认证和显式 `authentication.mode: none` 保留既有 HTTP Header 路径。Streamable HTTP 可显式选择 `authentication.mode: cimd-client-credentials`，提供已发布的 `identityRef`、已批准的 `policyRef`、非空最小 `requestedScopes`、绝对保护目录 `stateRoot`，以及引用 Host 凭据中 32 字节 base64url 加密 key 的 `encryptionKeyRef`。可选精确 `issuer` 在资源列出多个 AS 时固定唯一选择。公共本地身份服务核对已安装 consumer Context 与政策，只授予目标绑定 signer lease，身份私钥保留本机。
 
 `connectionId` 是持久的全 Host 逻辑连接标识，与 `serverName` 不同。不同 Agent 可使用不同 connectionId 复用服务器名称。版本化进程 registry 在发现或签名前拒绝任何 scope、app root、state目录或 package 副本中的重复 id。这一保守 Host 契约持续到 quiescent disposal，包含初始化失败；opaque owner token 防止旧 disposer 删除新 owner。重载同一逻辑连接沿用原配置 id，进程重启仍读取原持久禁用 fence。多个进程共享同一保护目录和 id 表示同一个逻辑连接及代次，不表示各自独立的 Agent 连接。
 
@@ -83,6 +83,19 @@ Streamable HTTP 可显式选择 `authentication.mode: cimd-client-credentials`�
 Token 是有界寿命且满足请求 scope 的 opaque Bearer。完整 connection/identity/publication/issuer/resource/discovery/scope/policy 分区隔离加密存储与 single-flight。每个 Token 任务固定不可变 binding，提交和物理发送重新检查代次与本地许可。Linux 内核锁串行持久变更，由持锁 worker 自己写入、fsync、rename 密文；holder 死亡不能让旧父操作复活禁用 fence，stdin 失败也被包含。断开在第一个 await 前停止 admission，持久禁用、取消并 drain 任务，独立报告可信撤销端点结果 confirmed 或 remote_revocation_unconfirmed。资源 401 使当前操作失败而不重放，下一明确操作才可重取。
 
 Host 专用 `MachineAuthenticationSession` 提供自身连接的脱敏 status() 和 dispose(true)。认证不向模型添加文本或凭据；工具 schema、scope、附件和结果呈现继续沿用下文机制。SDK 精确固定 1.29.0，此模式使用 Streamable HTTP initialize / 2025-11-25，未实现 2026 server/discover。
+
+显式启用的 `management` 与 `management-remote` 入口向 Host 受保护用户客户端提供状态、断开和明确重新启用。它们与既有 Typert Gateway 一起组合；管理 allowlist 默认拒绝所有调用者：
+
+```yaml
+- name: '@deepseek-ai/dsh-mcp-client/management'
+  config:
+    managerConsumers: ['@deepseek-ai/dsh-mcp-client/management-remote']
+- name: '@deepseek-ai/dsh-mcp-client/management-remote'
+```
+
+机器 row 可声明 `inject: [mcpConnections, anpIdentity, credentials]`，使 Loader 在激活前提供三项服务。受保护用户端点为 `mcpConnections/status`、`mcpConnections/disconnect` 和 `mcpConnections/enable`，均只接受 `{ connectionId }`。状态区分身份 binding、可用 Token 与实际 SDK/工具就绪，不返回 URL 或凭据。管理服务每次操作验证已安装 Remote Context；C 另行验证实际 MCP consumer 与当前政策。
+
+明确断开持久化禁用代次、取消在途工作、关闭 SDK 并移除工具。重载和进程退出保留持久状态。已禁用 row 重载后仍可查询，不联系资源或取得 signer lease。明确重新启用重复公开发现、当前 C 授权和 SDK/工具连接；失败保留禁用 fence。操作归属防止旧启用失败禁用并发后继。重启无法恢复此前远端撤销证明，按未确认报告。这些 Host 入口不提供专用设置卡或 ACP 身份绑定。
 
 在 Electron 中，内部 Linux 持锁 worker 仅在当前 Host 的 `process.versions.electron` 确认运行环境后显式进入 RunAsNode。它不依赖继承的环境标志，也不改变其他子进程的启动模式。Store 仍需系统提供 `flock` 可执行程序。
 

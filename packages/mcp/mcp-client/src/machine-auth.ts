@@ -1,5 +1,5 @@
 /** One machine connection: public discovery, local identity lease, encrypted tokens and request authentication. @module */
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
 import { performance } from 'node:perf_hooks'
 import type { Context } from '@deepseek-ai/cordis'
@@ -16,6 +16,15 @@ interface Binding {
   readonly partition: string
 }
 interface Credentials { resolve(ref: string): Promise<{ value: string } | undefined> }
+interface AuthenticationStatus {
+  connectionId: string
+  state: string
+  tokenReady: boolean
+  generation: number
+  remoteRevocation: string
+  issuer?: string
+  resource?: string
+}
 class RetryableTokenError extends Error { constructor(code: string, readonly retryAfterMs = 0) { super(code) } }
 const flights = new Map<string, Promise<MachineToken>>()
 const ownerRegistryKey = Symbol.for('@deepseek-ai/dsh-mcp-client/connection-owners/1')
@@ -35,6 +44,10 @@ export class MachineAuthenticationSession {
   private readonly refreshTarget: () => Promise<void>
   private refreshing: Promise<void> | undefined
   private blocked = false
+  private tokenReady = false
+  private managementAuthorization: (() => void) | undefined
+  private readonly enableOperationId: string | undefined
+  private tokenExpiresAt = 0
   private tokenAttempts = 0
   private priorTokenMayRemain = false
   private revocation: 'not_requested' | 'confirmed' | 'remote_revocation_unconfirmed' = 'not_requested'
@@ -42,9 +55,12 @@ export class MachineAuthenticationSession {
   private readonly startedAt = Date.now()
   private readonly pending = new Set<Promise<unknown>>()
   constructor(ctx: Context, private readonly config: MachineAuthentication, endpoint: string,
-    private readonly send: typeof machineFetch = machineFetch) {
+    private readonly send: typeof machineFetch = machineFetch,
+    explicitEnable?: { generation: number; authorize: () => void }) {
     config = structuredClone(config)
     this.config = config
+    this.managementAuthorization = explicitEnable?.authorize
+    this.enableOperationId = explicitEnable ? randomUUID() : undefined
     if (!/^[A-Za-z0-9_-]{1,128}$/u.test(config.connectionId)) throw new Error('invalid_connection_id')
     if (connectionOwners.has(config.connectionId)) throw new Error('machine_connection_id_conflict')
     connectionOwners.set(config.connectionId, this.connectionOwner)
@@ -71,9 +87,20 @@ export class MachineAuthenticationSession {
           if (client.algorithm !== 'ES256' || client.signerMode !== 'local') throw new Error('unsupported_machine_profile')
           const partition = createHash('sha256').update(JSON.stringify([config.identityRef, client.clientId, client.keyId, client.version,
             target.issuer, target.resource, target.metadataDigest, [...new Set(config.requestedScopes)].sort(), config.mode, config.connectionId, lease.policyGeneration])).digest('hex')
-          const generation = await this.store.open(partition)
+          const requestedEnable = explicitEnable
+          const generation = requestedEnable
+            ? await this.store.enable(requestedEnable.generation, partition, async () => {
+              requestedEnable.authorize()
+              if (this.closing) throw new Error('connection_disabled')
+              await lease.assertActive()
+              requestedEnable.authorize()
+              if (this.closing) throw new Error('connection_disabled')
+            }, this.enableOperationId)
+            : await this.store.open(partition)
+          explicitEnable = undefined
           if (this.disposed || this.closing) throw new Error('connection_disabled')
           const previous = this.binding
+          this.tokenReady = false
           this.binding = Object.freeze({ target, lease, partition, generation })
           previous?.lease.dispose()
         } catch (error) { lease.dispose(); throw error }
@@ -117,6 +144,7 @@ export class MachineAuthenticationSession {
     const response = await this.send(request, { redirect: 'manual', signal: AbortSignal.any([request.signal, this.controller.signal]) })
     if (response.status >= 300 && response.status < 400) { await response.body?.cancel(); throw new Error('credential_redirect_blocked') }
     if (response.status === 401) {
+      this.tokenReady = false
       await response.body?.cancel(); await this.store.clear(binding.generation, binding.partition)
       throw new Error('resource_unauthorized_result_unknown')
     }
@@ -126,8 +154,10 @@ export class MachineAuthenticationSession {
     return response
   }
   private async assertBinding(binding: Binding): Promise<void> {
+    this.managementAuthorization?.()
     if (this.disposed || this.closing || this.binding !== binding || Date.now() >= binding.target.expiresAt) throw new Error('connection_generation_changed')
     await binding.lease.assertActive()
+    this.managementAuthorization?.()
     if (this.disposed || this.closing || this.binding !== binding) throw new Error('connection_generation_changed')
   }
   private async acquire(binding: Binding): Promise<MachineToken> {
@@ -138,7 +168,11 @@ export class MachineAuthenticationSession {
     const rollback = this.monotonic && now < this.monotonic.wall + (performance.now() - this.monotonic.tick) - 1000
     this.monotonic = { wall: now, tick: performance.now() }
     if (token && token.acquiredAt >= this.startedAt && !rollback && now >= token.acquiredAt
-      && token.expiresAt - now > Math.min(30000, (token.expiresAt - token.acquiredAt) / 10)) return token
+      && token.expiresAt - now > Math.min(30000, (token.expiresAt - token.acquiredAt) / 10)) {
+      this.tokenReady = true; this.tokenExpiresAt = token.expiresAt
+      return token
+    }
+    this.tokenReady = false
     if (token && token.expiresAt > now) this.priorTokenMayRemain = true
     if (now < await this.store.retryAt(binding.generation, binding.partition)) throw new Error('token_rate_limited')
     const flightKey = `${this.config.stateRoot}:${this.config.connectionId}:${binding.generation}:${binding.partition}`
@@ -151,6 +185,8 @@ export class MachineAuthenticationSession {
     const acquired = await flight
     if (this.disposed || this.closing) throw new Error('connection_disabled')
     await this.assertBinding(binding)
+    this.tokenReady = true
+    this.tokenExpiresAt = acquired.expiresAt
     return acquired
   }
   private async issueWithRetry(binding: Binding): Promise<MachineToken> {
@@ -213,9 +249,21 @@ export class MachineAuthenticationSession {
   /** Return public connection facts without secret references or credential values.
    * @returns Sanitized Host management status.
    */
-  status(): { connectionId: string; state: string; generation: number; remoteRevocation: string; issuer?: string; resource?: string } {
-    return { connectionId: this.config.connectionId, remoteRevocation: this.revocation, state: this.disposed ? 'disconnected' : this.blocked ? 'blocked' : this.binding ? 'ready' : 'discovering', generation: this.binding?.generation ?? 0,
+  status(): AuthenticationStatus {
+    return { connectionId: this.config.connectionId, remoteRevocation: this.revocation, tokenReady: this.tokenReady && !this.disposed && Date.now() < this.tokenExpiresAt, state: this.disposed ? 'disconnected' : this.blocked ? 'blocked' : this.binding ? 'ready' : 'discovering', generation: this.binding?.generation ?? 0,
       ...(this.binding ? { issuer: this.binding.target.issuer, resource: this.binding.target.resource } : {}) }
+  }
+  /** Complete explicit enablement after actual SDK readiness while the manager remains authorized. */
+  async completeEnable(): Promise<void> {
+    await this.initialized
+    if (!this.binding) throw new Error('connection_disabled')
+    await this.assertBinding(this.binding)
+    this.managementAuthorization?.()
+    this.managementAuthorization = undefined
+  }
+  /** Roll back only this enable operation, including an uncertain local write result. */
+  async rollbackEnable(): Promise<void> {
+    if (this.enableOperationId) await this.store.disable(undefined, this.enableOperationId)
   }
   /** Stop work and quiesce requests. Explicit disconnect persists a disabled fence.
    * @param disconnect - Whether this is a management disconnect rather than process unload.

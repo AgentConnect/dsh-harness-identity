@@ -104,6 +104,8 @@ export interface ConnectionHandle {
    * whether a failed startup is fatal via `failOnStartupError`.
    */
   ready: Promise<ConnectionOutcome>
+  /** Read actual SDK connection and initial tool synchronization state. */
+  status(): 'connecting' | 'ready' | 'retry_wait' | 'blocked' | 'disconnected'
   /**
    * Stop reconnection, close the live client, wait for the in-flight attempt
    * and queued tool syncs to quiesce, then unregister every tool this server
@@ -329,6 +331,8 @@ export function startConnection(
 
   return {
     ready,
+    status: () => disposed ? 'disconnected' : client && connectedAt !== undefined ? 'ready'
+      : reconnectTimer !== undefined ? 'retry_wait' : client ? 'connecting' : 'blocked',
     async dispose(): Promise<void> {
       disposed = true
       if (reconnectTimer !== undefined) {

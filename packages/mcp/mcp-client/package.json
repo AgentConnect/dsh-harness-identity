@@ -19,11 +19,21 @@
       "default": "./lib/index.js"
     },
     "./src/*": "./src/*",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./management": {
+      "types": "./lib/types/management.d.ts",
+      "default": "./lib/management.js"
+    },
+    "./management-remote": {
+      "types": "./lib/types/management-remote.d.ts",
+      "default": "./lib/management-remote.js"
+    }
   },
   "files": [
     "lib/index.js",
-    "lib/types/**/*.d.ts"
+    "lib/types/**/*.d.ts",
+    "lib/management.js",
+    "lib/management-remote.js"
   ],
   "license": "MIT",
   "peerDependencies": {
@@ -34,7 +44,10 @@
     "@deepseek-ai/dsh-timeout": "workspace:^",
     "@deepseek-ai/dsh-tools": "workspace:^",
     "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/dsh-http-proxy": "workspace:^"
+    "@deepseek-ai/dsh-http-proxy": "workspace:^",
+    "@deepseek-ai/dsh-typert-protocol": "workspace:^",
+    "@deepseek-ai/dsh-typert-registry": "workspace:^",
+    "@deepseek-ai/cordis-plugin-loader": "workspace:^"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
@@ -54,6 +67,14 @@
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-http-proxy": "workspace:^",
     "@deepseek-ai/dsh-agent-loop-testkit": "workspace:^",
-    "@deepseek-ai/dsh-session": "workspace:^"
+    "@deepseek-ai/dsh-session": "workspace:^",
+    "@deepseek-ai/dsh-typert-protocol": "workspace:^",
+    "@deepseek-ai/dsh-typert-registry": "workspace:^",
+    "@deepseek-ai/dsh-api-gateway": "workspace:^",
+    "@deepseek-ai/dsh-client-connection": "workspace:^",
+    "@deepseek-ai/dsh-host-webserver": "workspace:^",
+    "@deepseek-ai/dsh-system-prompt": "workspace:^",
+    "@deepseek-ai/cordis-plugin-loader": "workspace:^",
+    "@deepseek-ai/cordis-plugin-include": "workspace:^"
   }
 }

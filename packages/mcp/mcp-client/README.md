@@ -72,7 +72,7 @@ After startup, the server's tools appear as `mcp__<serverName>__<tool>` — try 
 <a id="cimd-machine-authentication"></a>
 ### CIMD machine authentication
 
-Streamable HTTP can explicitly select `authentication.mode: cimd-client-credentials`. Provide a published `identityRef`, approved `policyRef`, nonempty minimum `requestedScopes`, absolute protected `stateRoot`, and `encryptionKeyRef` naming a Host credential with a 32-byte base64url encryption key. An optional exact `issuer` selects one AS when resource metadata lists several. The shared local identity service binds the installed consumer Context to its policy and supplies only a target-bound signer lease; private identity keys remain local.
+Omitted authentication and explicit `authentication.mode: none` retain the existing HTTP headers path. Streamable HTTP can explicitly select `authentication.mode: cimd-client-credentials`. Provide a published `identityRef`, approved `policyRef`, nonempty minimum `requestedScopes`, absolute protected `stateRoot`, and `encryptionKeyRef` naming a Host credential with a 32-byte base64url encryption key. An optional exact `issuer` selects one AS when resource metadata lists several. The shared local identity service binds the installed consumer Context to its policy and supplies only a target-bound signer lease; private identity keys remain local.
 
 `connectionId` is a persistent Host-wide logical connection identifier, distinct from `serverName`. Different Agents may reuse a server name with different connection ids. A versioned process registry rejects the same connection id in any scope, app root, state directory or loaded package copy before discovery or signing. This conservative Host contract retains ownership until quiescent disposal, including failed initialization. An opaque owner token prevents an old disposer from releasing the next owner. Reloading the same logical connection reuses its configured id; a restarted process still reads the original persistent disabled fence. Multiple processes sharing one protected directory and id operate the same logical connection and its generation, not independent Agent connections.
 
@@ -83,6 +83,19 @@ Machine HTTPS uses the existing Host `proxyRouteFor` authority. This profile imp
 Tokens remain opaque Bearer values with bounded expiry and sufficient requested scopes. The complete connection/identity/publication/issuer/resource/discovery/scope/policy partition isolates encrypted storage and single-flight acquisition. Each Token task captures one immutable binding, and commit and physical send recheck its generation and local permission. Linux kernel locking serializes updates; the lock-owning worker writes, fsyncs and renames encrypted data itself. Killing that worker cannot let an old parent revive a disabled fence, and broken stdin is contained. Disconnect stops admission before the first await, persists the disabled fence, aborts and drains tasks, and independently reports trusted-endpoint revocation as confirmed or remote_revocation_unconfirmed. A resource 401 fails the current operation without replay; only the next explicit operation may acquire a new Token.
 
 The Host-only `MachineAuthenticationSession` export offers sanitized `status()` and `dispose(true)` for its own connection. Authentication adds no model text or credentials; tool schemas, scoped registration, attachments and result rendering use the existing paths below. The pinned SDK is 1.29.0; this mode uses Streamable HTTP initialize and protocol 2025-11-25, without a 2026 server/discover implementation.
+
+The opt-in `management` and `management-remote` entries expose connection status, disconnect and explicit enablement to the Host’s authenticated user client. Compose them beside the existing Typert Gateway; the management allowlist denies every manager by default:
+
+```yaml
+- name: '@deepseek-ai/dsh-mcp-client/management'
+  config:
+    managerConsumers: ['@deepseek-ai/dsh-mcp-client/management-remote']
+- name: '@deepseek-ai/dsh-mcp-client/management-remote'
+```
+
+A machine row can require `inject: [mcpConnections, anpIdentity, credentials]` so the Loader makes all three providers available before activation. The protected user endpoints are `mcpConnections/status`, `mcpConnections/disconnect` and `mcpConnections/enable`, each accepting only `{ connectionId }`. Status separates identity binding, usable Token and actual SDK/tool readiness, and returns no URLs or credentials. The manager verifies the installed Remote Context on every operation; C separately verifies the installed MCP consumer and its current policy.
+
+Explicit disconnect persists a disabled generation, aborts pending work, closes the SDK and removes its tools. Reload and process unload retain the durable state. A disabled row remains queryable after reload without contacting the resource or taking a signer lease. Explicit enablement repeats public discovery, current C authorization and SDK/tool connection; a failed attempt keeps the disabled fence. Operation ownership prevents a failed old activation from disabling a concurrent successor. Restart cannot recover proof of a previous remote revocation and reports it as unconfirmed. A dedicated settings card and ACP identity binding are not provided by these Host entries.
 
 Under Electron, the internal Linux lock worker explicitly uses RunAsNode only when the current Host reports `process.versions.electron`. It does not depend on an inherited environment flag or change other child-process launch modes. The Store still requires the system `flock` executable.
 

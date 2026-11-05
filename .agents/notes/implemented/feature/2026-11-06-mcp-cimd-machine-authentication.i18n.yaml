@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-11-06-mcp-cimd-machine-authentication.md
-2026-11-06-mcp-cimd-machine-authentication.md: 2135d4291377a93427823d5d6c242e65057d0125
-2026-11-06-mcp-cimd-machine-authentication.zh.md: 6eeb39e7bfc54c0e72d3a7d91db74b3e6009570d
+2026-11-06-mcp-cimd-machine-authentication.md: 09bfc07b2a12a9683af0da1d8f87a61d9f6eab83
+2026-11-06-mcp-cimd-machine-authentication.zh.md: b90697395601a7608f8d82c1e192f8c963b46fbb

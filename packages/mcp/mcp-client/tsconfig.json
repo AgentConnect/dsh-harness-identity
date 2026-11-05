@@ -34,6 +34,12 @@
     },
     {
       "path": "../../util/http-proxy"
+    },
+    {
+      "path": "../../typert/protocol"
+    },
+    {
+      "path": "../../typert/registry"
     }
   ]
 }

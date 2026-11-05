@@ -18,6 +18,10 @@ The private lock worker uses the current Host executable. Under Electron, the wo
 
 Host-wide connectionId is a persistent logical connection identity. A versioned globalThis Symbol.for registry rejects duplicates across scopes, roots, state directories and package copies; opaque owner tokens release only their own reservation. Restart never creates a new id to bypass a disabled fence. Existing Agent-scoped serverName and attachment behavior remain independent. The machine direct profile consults the existing proxyRouteFor before a request or signature; a proxy requirement is explicitly unsupported rather than silently bypassed.
 
+An opt-in Host service owns the configured authentication session and SDK supervisor as one lifecycle. An independently loaded user Remote reaches it through the existing authenticated Gateway. The service binds only operator-allowlisted installed manager Contexts; the current MCP Context remains C’s separate signer authority. No model tool accepts management operations or consumer names. Omitted HTTP authentication and explicit none select the existing headers transport; the optional union has no object default that could manufacture a partial machine configuration.
+
+Disconnect persists the disabled fence before quiescing Token flights, SDK transport and tools. Ordinary unload retains state. Enablement requires new discovery and a current C lease, then CAS-replaces the observed disabled generation without retaining old ciphertext. A unique activation id permits conditional rollback even when a local write result is uncertain; it cannot disable another process’s winning activation. Manager permission is checked across awaits until SDK initialization and tool synchronization complete. Sanitized management state separates binding, Token and actual supervisor readiness. A dedicated UI is outside these Host/Remote entries.
+
 ## Alternatives considered
 
 **Reading an opaque scopeKey id or inheriting the initiator** cannot prove the current new Agent: setup may inherit its parent, and scope keys promise no properties. Connection ownership uses an explicit Host-global identifier enforced by the actual constructor.
@@ -36,4 +40,4 @@ The explicit Electron 43.3 / ABI148 source regression removes the inherited RunA
 
 ## Consequences
 
-Actual wire support is the installed SDK 1.29.0 Streamable HTTP initialize lane, including protocol 2025-11-25. Modern server/discover and machine credential storage on platforms without Linux flock remain unimplemented. Local disconnect fencing is separate from remote Token revocation; the result is reported independently as confirmed or remote_revocation_unconfirmed, and a re-enable UI remains deferred. Public discovery and encrypted credential storage add no model-visible text or credentials.
+Actual wire support is the installed SDK 1.29.0 Streamable HTTP initialize lane, including protocol 2025-11-25. Modern server/discover and machine credential storage on platforms without Linux flock remain unimplemented. Local disconnect fencing is separate from remote Token revocation; the result is reported independently as confirmed or remote_revocation_unconfirmed, and a dedicated settings UI remains deferred. Public discovery and encrypted credential storage add no model-visible text or credentials.

@@ -18,6 +18,10 @@ Status: implemented
 
 全 Host connectionId 是持久逻辑连接身份。版本化 globalThis Symbol.for registry 在任何 scope、root、state目录或 package 副本中拒绝重复 id，opaque owner token 仅能释放自身；重启不生成新 id 绕过持久禁用。既有 Agent scoped serverName 和附件实现保持独立。机器 direct profile 在发请求或签名前查询既有 proxyRouteFor；需要代理时明确 unsupported，不暗中绕代理。
 
+显式启用的 Host 服务把认证 Session 与 SDK supervisor 作为一个生命周期管理。独立加载的用户 Remote 经既有受保护 Gateway 调用；服务只绑定运营 allowlist 内实际安装的 manager Context，当前 MCP Context 仍是 C 的独立 signer 权限主体。模型工具不接受管理动作或 consumer 名称。省略 HTTP 认证和显式 none 选择既有 Header transport；可选 union 不用 object 默认值生成不完整机器配置。
+
+断开先持久化禁用 fence，再等待 Token flight、SDK transport 和工具停止；普通卸载保留状态。重新启用先重新发现并取得当前 C lease，再以 CAS 替换观察到的禁用代次且不保留旧密文。唯一 activation id 允许本地写入结果不确定时条件回滚，不会禁用另一进程成功的新 activation。管理权限跨 await 检查至 SDK 初始化和工具同步完成；脱敏状态区分 binding、Token 与实际 supervisor ready。专用 UI 不属于这些 Host/Remote 入口。
+
 ## Alternatives considered
 
 **读取 opaque scopeKey 的 id 或继承 initiator** 无法证明当前新建 Agent 的身份：setup 期间 initiator 可能是父 Agent，scopeKey 也不承诺属性。连接采用明确的 Host 全局标识和实际 constructor 所有权。
@@ -36,4 +40,4 @@ Status: implemented
 
 ## Consequences
 
-实际 wire 是 SDK 1.29.0 的 Streamable HTTP initialize，包括 2025-11-25。现代 server/discover 和无 Linux flock 平台的机器凭据存储尚未实现。本地断开 fence 与远端 Token 撤销分别处理，撤销结果独立报告 confirmed 或 remote_revocation_unconfirmed，重新启用 UI 尚待实现。公开发现及加密存储不向模型添加文本或凭据。
+实际 wire 是 SDK 1.29.0 的 Streamable HTTP initialize，包括 2025-11-25。现代 server/discover 和无 Linux flock 平台的机器凭据存储尚未实现。本地断开 fence 与远端 Token 撤销分别处理，撤销结果独立报告 confirmed 或 remote_revocation_unconfirmed，专用设置 UI 尚待实现。公开发现及加密存储不向模型添加文本或凭据。

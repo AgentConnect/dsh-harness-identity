@@ -15,9 +15,10 @@
 
 import { isAbsolute } from 'node:path'
 import { MachineAuthenticationSession } from './machine-auth.ts'
-import { createTransport } from './transport.ts'
 import { machineUrl } from './machine-http.ts'
 import type { MachineAuthentication } from './machine-types.ts'
+import { ManagedConnection } from './managed-connection.ts'
+import type {} from './management.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { scopeOf } from '@deepseek-ai/dsh-scope'
@@ -93,7 +94,7 @@ export interface StreamableHttpConfig {
   /** MCP endpoint URL. */
   url: string
   /** Explicit local CIMD machine authentication; omission retains existing headers behavior. */
-  authentication?: MachineAuthentication
+  authentication?: MachineAuthentication | { mode: 'none' }
   /** Additional headers attached to MCP requests. */
   headers: Record<string, string>
   /** Per-tool-call timeout in milliseconds. */
@@ -137,7 +138,7 @@ export const Config = z.union([
     serverName: z.string().required().pattern(SERVER_NAME_PATTERN),
     url: z.string().required(),
     headers: z.dict(String).default({}),
-    authentication: z.object({
+    authentication: z.union([z.object({ mode: z.const('none').required() }), z.object({
       mode: z.const('cimd-client-credentials'), connectionId: z.string().required(),
       identityRef: z.object({ storeId: z.string().required(), identityId: z.string().required(), did: z.string().required() }),
       policyRef: z.string().required(), requestedScopes: z.array(String).required(), issuer: z.string(),
@@ -148,7 +149,7 @@ export const Config = z.union([
         initialDelayMs: z.number().min(1).max(30000).default(250),
         maxDelayMs: z.number().min(1).max(30000).default(5000),
       }),
-    }),
+    })]),
     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
     failOnStartupError: z.boolean().default(false),
     reconnect: Reconnect,
@@ -166,6 +167,7 @@ export const Config = z.union([
  * @returns startup readiness after connection and initial tool discovery settle.
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
+  if (config.transport === 'streamable-http' && config.authentication === null) throw new Error('invalid_machine_authentication')
   // Fail loud at load: reconnect misconfiguration (including programmatic
   // construction that bypassed Schemastery) rejects THIS instance before any
   // effect registers.
@@ -189,8 +191,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     return () => void names.delete(config.serverName)
   }, 'mcp-client.serverName')
 
-  let machine: MachineAuthenticationSession | undefined
-  if (config.transport === 'streamable-http' && config.authentication) {
+  if (config.transport === 'streamable-http' && config.authentication && config.authentication.mode !== 'none') {
     const auth = config.authentication
     machineUrl(config.url)
     if (!isAbsolute(auth.stateRoot) || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(auth.encryptionKeyRef)
@@ -199,18 +200,22 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       || Object.keys(config.headers).some(key => /^(host|authorization|proxy-authorization|cookie|poppy-session|dpop)$/iu.test(key))) {
       throw new Error('invalid_machine_authentication')
     }
-    const authentication = new MachineAuthenticationSession(ctx, auth, config.url)
-    machine = authentication
-    ctx.effect(() => () => authentication.dispose(), 'mcp-client.machine-authentication')
+    const connection = new ManagedConnection(ctx, { ...config, authentication: auth }, reconnect)
+    const unregister = ctx.get('mcpConnections')?.register(ctx, auth.connectionId, connection)
+    ctx.effect(() => async () => {
+      try { await connection.dispose() } finally { unregister?.() }
+    }, 'mcp-client.machine-authentication')
+    const outcome = await connection.start()
+    if (outcome.error !== undefined && config.failOnStartupError) {
+      throw new Error(`mcp-client(${config.serverName}): initial connection or tool synchronization failed`, { cause: outcome.error })
+    }
+    return
   }
 
   // The supervisor owns the client/transport generations, the reconnect
   // loop, and the live tool registrations; disposal stops reconnection,
   // quiesces in-flight work, and unregisters the current generation.
-  const authentication = machine
-  const connection = authentication
-    ? startConnection(ctx, config, reconnect, () => createTransport(config, authentication.fetch))
-    : startConnection(ctx, config, reconnect)
+  const connection = startConnection(ctx, config, reconnect)
 
   ctx.effect(() => {
     return () => connection.dispose()
