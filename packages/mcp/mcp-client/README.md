@@ -84,6 +84,8 @@ Tokens remain opaque Bearer values with bounded expiry and sufficient requested 
 
 The Host-only `MachineAuthenticationSession` export offers sanitized `status()` and `dispose(true)` for its own connection. Authentication adds no model text or credentials; tool schemas, scoped registration, attachments and result rendering use the existing paths below. The pinned SDK is 1.29.0; this mode uses Streamable HTTP initialize and protocol 2025-11-25, without a 2026 server/discover implementation.
 
+Under Electron, the internal Linux lock worker explicitly uses RunAsNode only when the current Host reports `process.versions.electron`. It does not depend on an inherited environment flag or change other child-process launch modes. The Store still requires the system `flock` executable.
+
 ### Tool naming and coexistence
 
 The model sees each tool under a stable server-qualified name: `mcp__<serverName>__<rawName>`, for example `mcp__github__create_issue` — the same naming shape Claude Code and Codex use. Names stay stable while the server keeps the same tool name, so session history and permission rules survive restarts and reloads. Two servers can both offer a tool named `search` and coexist as `mcp__github__search` and `mcp__web__search`.

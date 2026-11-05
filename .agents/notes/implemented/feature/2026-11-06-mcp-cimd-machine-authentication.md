@@ -14,6 +14,8 @@ The [MCP client](../../../../packages/mcp/mcp-client/README.md) adds an explicit
 
 Every Token flight captures one immutable target/lease/generation/partition. Signing, Token exchange, encrypted commit and physical resource send verify that same binding. Credential partitions include the publication key/version and policy generation. Linux kernel locking serializes durable mutations; the lock-owning worker performs writes and atomic renames, so killing it prevents a delayed parent operation from overwriting a newer disabled fence. Restart requests a new Token rather than trusting an old wall-clock lifetime.
 
+The private lock worker uses the current Host executable. Under Electron, the worker environment explicitly sets RunAsNode after checking `process.versions.electron`; Desktop may clear the inherited flag without changing how the holder starts. This environment applies only to the internal worker, and the system `flock` prerequisite remains explicit.
+
 Host-wide connectionId is a persistent logical connection identity. A versioned globalThis Symbol.for registry rejects duplicates across scopes, roots, state directories and package copies; opaque owner tokens release only their own reservation. Restart never creates a new id to bypass a disabled fence. Existing Agent-scoped serverName and attachment behavior remain independent. The machine direct profile consults the existing proxyRouteFor before a request or signature; a proxy requirement is explicitly unsupported rather than silently bypassed.
 
 ## Alternatives considered
@@ -29,6 +31,8 @@ Host-wide connectionId is a persistent logical connection identity. A versioned 
 ## Verification
 
 Package tests cover immutable Token-flight generations, revocation during signing, disabled admission, process/holder death and actual DNS/TLS sockets. The [headless machine scenario](../../../../snapshots/session/mcp-machine/snapshot.yml) boots the production plugin, SDK and agent loop, pins the keyless session transcript, and verifies that a resource 401 is not replayed. Remote identity and AS/RS fixtures remain distinct from product E2E and deployment evidence.
+
+The explicit Electron 43.3 / ABI148 source regression removes the inherited RunAsNode flag before exercising actual encrypted Store writes, disabled-fence restart, parent SIGKILL recovery and lock-worker loss. It verifies the private process launch, without claiming a packaged Desktop profile or native identity-provider acceptance test.
 
 ## Consequences
 

@@ -84,6 +84,8 @@ Token 是有界寿命且满足请求 scope 的 opaque Bearer。完整 connection
 
 Host 专用 `MachineAuthenticationSession` 提供自身连接的脱敏 status() 和 dispose(true)。认证不向模型添加文本或凭据；工具 schema、scope、附件和结果呈现继续沿用下文机制。SDK 精确固定 1.29.0，此模式使用 Streamable HTTP initialize / 2025-11-25，未实现 2026 server/discover。
 
+在 Electron 中，内部 Linux 持锁 worker 仅在当前 Host 的 `process.versions.electron` 确认运行环境后显式进入 RunAsNode。它不依赖继承的环境标志，也不改变其他子进程的启动模式。Store 仍需系统提供 `flock` 可执行程序。
+
 ### 工具命名与共存
 
 模型看到每个工具都带有稳定的服务器限定名称：`mcp__<serverName>__<rawName>`，例如 `mcp__github__create_issue`——与 Claude Code 和 Codex 使用的命名形态相同。只要服务器保持相同的工具名称，名称就保持不变，因此会话历史与权限规则在重启和重载后仍然有效。两个服务器可以同时提供名为 `search` 的工具，分别以 `mcp__github__search` 和 `mcp__web__search` 共存。

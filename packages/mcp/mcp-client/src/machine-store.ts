@@ -166,8 +166,11 @@ export class MachineConnectionStore {
       }).catch(() => { emit('failed'); process.exitCode = 1; process.stdin.destroy(); }); });
       lines.on('close', () => { void chain.then(() => {}); });
     `
+    const environment = scrubbedParentEnv()
+    // The executable belongs to this Host. Only this private worker must enter Node mode under Electron.
+    if (process.versions.electron) environment.ELECTRON_RUN_AS_NODE = '1'
     const owner = spawn('flock', ['--exclusive', '--timeout', '10', this.lock, process.execPath, '-e', script, this.file, this.root],
-      { env: scrubbedParentEnv(), stdio: ['pipe', 'pipe', 'pipe'] })
+      { env: environment, stdio: ['pipe', 'pipe', 'pipe'] })
     owner.stderr.resume()
     let acknowledge: { resolve(): void; reject(error: Error): void } | undefined
     owner.stdin.on('error', () => { acknowledge?.reject(new Error('connection_store_locked')); acknowledge = undefined })

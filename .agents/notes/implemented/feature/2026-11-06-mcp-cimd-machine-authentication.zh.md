@@ -14,6 +14,8 @@ Status: implemented
 
 每个 Token flight 固定同一个 target、lease、generation、partition，签名、Token 交换、加密提交和实际资源发送均复核该快照。凭据隔离包含发布 key/version 与政策代次。Linux 内核锁串行化持久变更；持锁 worker 执行写入及原子 rename，其死亡使延迟的父操作不能覆盖更新的禁用 fence。重启重新申请 Token，不信任旧墙钟寿命。
 
+私有持锁 worker 使用当前 Host 的可执行程序。在 Electron 中，worker 检查 `process.versions.electron` 后在自己的环境显式设置 RunAsNode；Desktop 清除继承标志也不影响 holder 启动。该环境仅用于内部 worker，系统提供 `flock` 的前提仍明确保留。
+
 全 Host connectionId 是持久逻辑连接身份。版本化 globalThis Symbol.for registry 在任何 scope、root、state目录或 package 副本中拒绝重复 id，opaque owner token 仅能释放自身；重启不生成新 id 绕过持久禁用。既有 Agent scoped serverName 和附件实现保持独立。机器 direct profile 在发请求或签名前查询既有 proxyRouteFor；需要代理时明确 unsupported，不暗中绕代理。
 
 ## Alternatives considered
@@ -29,6 +31,8 @@ Status: implemented
 ## Verification
 
 包测试覆盖 Token flight 不可变代次、签名中撤销、断开 admission、进程或 holder 死亡及真实 DNS/TLS socket。[headless 机器场景](../../../../snapshots/session/mcp-machine/snapshot.yml)启动生产插件、SDK 与 agent loop，固定 keyless 会话 transcript，并验证资源 401 不自动重放。外部身份与 AS/RS fixture 和产品 E2E、部署证据分别记录。
+
+显式 Electron 43.3 / ABI148 源码回归在移除继承的 RunAsNode 标志后执行真实加密 Store 写入、禁用 fence 重启、父进程 SIGKILL 恢复及持锁 worker 死亡。它验证私有进程启动，不冒称已完成安装包 Desktop profile 或 native 身份 provider 验收。
 
 ## Consequences
 
