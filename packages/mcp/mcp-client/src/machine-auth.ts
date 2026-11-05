@@ -91,7 +91,7 @@ export class MachineAuthenticationSession {
     if (!binding) throw new Error('connection_disabled')
     const request = new Request(input, init)
     if (request.url !== binding.target.resource) throw new Error('resource_mismatch')
-    if (request.headers.has('authorization') || request.headers.has('poppy-session') || request.headers.has('dpop')) throw new Error('managed_authentication_header')
+    if (request.headers.has('host') || request.headers.has('authorization') || request.headers.has('poppy-session') || request.headers.has('dpop')) throw new Error('managed_authentication_header')
     const token = await this.acquire(binding)
     await this.assertBinding(binding)
     if (this.disposed || this.closing) throw new Error('connection_disabled')

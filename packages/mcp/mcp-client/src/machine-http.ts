@@ -58,6 +58,7 @@ async function requestMachine(input: string | URL | Request, init: RequestInit, 
   if (!(input instanceof Request)) machineUrl(String(input))
   const outgoing = new Request(input, { ...init, redirect: 'manual', credentials: 'omit' })
   try {
+    if (outgoing.headers.has('host')) throw new Error('managed_authentication_header')
     const url = machineUrl(outgoing.url)
     if (test && url.origin !== test.origin) throw new Error('unsafe_target')
     const signal = AbortSignal.any([outgoing.signal, AbortSignal.timeout(30000)])
@@ -93,7 +94,7 @@ async function requestMachine(input: string | URL | Request, init: RequestInit, 
     })
   } catch (error) {
     try { await outgoing.body?.cancel() } catch { /* The body reader owns its read failure and may already be closed. */ }
-    if (error instanceof Error && ['unsafe_target', 'invalid_target', 'request_too_large'].includes(error.message)) throw error
+    if (error instanceof Error && ['unsafe_target', 'invalid_target', 'request_too_large', 'managed_authentication_header'].includes(error.message)) throw error
     throw new Error('network_failure')
   }
 }

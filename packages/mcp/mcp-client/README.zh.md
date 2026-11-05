@@ -54,7 +54,7 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
 
 Streamable HTTP 可显式配置 `authentication.mode: cimd-client-credentials`。`connectionId` 是持久本地连接标识，`identityRef` 为公共身份的 `{storeId, identityId, did}`，`policyRef` 指向管理员预授权政策，`requestedScopes` 必须是非空最小权限集合。`stateRoot` 是绝对路径的受保护凭据目录；`encryptionKeyRef` 引用 Host 凭据中的 32 字节 base64url 加密 key，YAML 不保存实际 key 或 Token。可选 `issuer` 在多个 AS 中固定唯一选择；`discoveryCacheMs` 控制发现缓存（默认 300000，最大 3600000），`tokenRetry` 控制有界 Token 尝试与退避。
 
-Host 必须提供实现 `bindProtocolConsumer(ctx)` 的公共身份服务和凭据引用服务。身份服务核对真实 consumer Context、显式政策与已发布身份，返回绑定目标的本地 signer lease。服务缺失、身份未发布、政策拒绝、元数据不兼容或 grant 错误都会阻断机器认证。此模式拒绝配置中的受管 Authorization、Cookie、DPoP、Poppy-Session Header。
+Host 必须提供实现 `bindProtocolConsumer(ctx)` 的公共身份服务和凭据引用服务。身份服务核对真实 consumer Context、显式政策与已发布身份，返回绑定目标的本地 signer lease。服务缺失、身份未发布、政策拒绝、元数据不兼容或 grant 错误都会阻断机器认证。此模式拒绝配置中的受管 Host、Authorization、Cookie、DPoP、Poppy-Session Header。
 
 Host 专用 `MachineAuthenticationSession` 导出提供脱敏 `status()` 与显式断开的 `dispose(true)`，只管理它自己的连接，不返回 Token。严格 JSON 拒绝重复成员、无效 UTF-8、BOM，元数据要求精确 JSON MIME；携带凭据的重定向不能改变目标。
 

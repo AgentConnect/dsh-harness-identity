@@ -222,6 +222,8 @@ describe('machine tokens and transport', () => {
     const f = await fixture()
     try {
       await expect(f.session.fetch(endpoint, { headers: { authorization: 'Bearer attacker' } })).rejects.toThrow('managed_authentication_header')
+      await expect(f.session.fetch(endpoint, { headers: { Host: 'different.example' } })).rejects.toThrow('managed_authentication_header')
+      expect(f.assertions).not.toHaveBeenCalled()
       await expect(f.session.fetch('https://resource.example/other')).rejects.toThrow('resource_mismatch')
       expect(f.tokenRequests).toHaveLength(0)
     } finally { await f.session.dispose() }

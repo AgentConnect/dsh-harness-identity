@@ -171,7 +171,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     machineUrl(config.url)
     if (!isAbsolute(auth.stateRoot) || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(auth.encryptionKeyRef) || auth.mode !== 'cimd-client-credentials' || !auth.requestedScopes.length
       || auth.requestedScopes.some(scope => !/^[\x21\x23-\x5b\x5d-\x7e]{1,128}$/u.test(scope))
-      || Object.keys(config.headers).some(key => /^(authorization|proxy-authorization|cookie|poppy-session|dpop)$/iu.test(key))) throw new Error('invalid_machine_authentication')
+      || Object.keys(config.headers).some(key => /^(host|authorization|proxy-authorization|cookie|poppy-session|dpop)$/iu.test(key))) throw new Error('invalid_machine_authentication')
     const authentication = new MachineAuthenticationSession(ctx, auth, config.url)
     machine = authentication
     ctx.effect(() => () => authentication.dispose(), 'mcp-client.machine-authentication')

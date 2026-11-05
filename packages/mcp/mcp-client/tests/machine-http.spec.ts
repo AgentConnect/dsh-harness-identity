@@ -79,6 +79,17 @@ it('uses real DNS and the Node all-address lookup signature, verifies TLS and op
   })
 })
 
+it('rejects HTTP Host overrides before DNS, TLS or request-body transmission', async () => {
+  let received = 0
+  await fixture((_request, response) => { received++; response.end('unexpected') }, async ({ origin, send, connections }) => {
+    await expect(send(origin + '/metadata', { method: 'POST', headers: { Host: 'different.example' },
+      body: 'private-test-marker' })).rejects.toThrow('managed_authentication_header')
+    expect(lookupAll).not.toHaveBeenCalled()
+    expect(connections()).toBe(0)
+    expect(received).toBe(0)
+  })
+})
+
 it('requires its exact test origin, NODE_ENV=test and explicit CA while preserving TLS hostname verification', async () => {
   await fixture((_request, response) => { response.end('unexpected') }, async ({ origin, send }) => {
     const wrongCa = createTestMachineFetch({ origin, ca: otherCa })
