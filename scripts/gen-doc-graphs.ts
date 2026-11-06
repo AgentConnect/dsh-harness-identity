@@ -99,6 +99,13 @@ const GROUP_ORDER = [
 
 const SERVICE_ROLES: ServiceRole[] = [
   {
+    key: 'mcpConnections',
+    pkg: 'mcp-client',
+    title: 'Host MCP connection lifecycle',
+    mode: 'core',
+    note: 'The Host manager controls explicit disconnect and enablement for registered machine connections.',
+  },
+  {
     key: 'attachments',
     pkg: 'attachment',
     title: 'Durable binary attachment storage',

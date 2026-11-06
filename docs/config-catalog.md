@@ -1554,7 +1554,10 @@ export interface StreamableHttpConfig {
   /** MCP endpoint URL. */
   url: string
   /** Explicit local CIMD machine authentication; omission retains existing headers behavior. */
-  authentication?: MachineAuthentication
+  authentication?: MachineAuthentication | {
+    /** Use caller-supplied headers without machine authentication. */
+    mode: 'none'
+  }
   /** Additional headers attached to MCP requests. */
   headers: Record<string, string>
   /** Per-tool-call timeout in milliseconds. */
@@ -1616,7 +1619,7 @@ export interface MachineAuthentication {
 }
 ```
 
-Source: [`packages/mcp/mcp-client/src/index.ts:108`](../packages/mcp/mcp-client/src/index.ts)
+Source: [`packages/mcp/mcp-client/src/index.ts:112`](../packages/mcp/mcp-client/src/index.ts)
 
 <a id="deepseek-aidsh-message-feedback"></a>
 

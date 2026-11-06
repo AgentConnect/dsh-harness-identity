@@ -94,7 +94,10 @@ export interface StreamableHttpConfig {
   /** MCP endpoint URL. */
   url: string
   /** Explicit local CIMD machine authentication; omission retains existing headers behavior. */
-  authentication?: MachineAuthentication | { mode: 'none' }
+  authentication?: MachineAuthentication | {
+    /** Use caller-supplied headers without machine authentication. */
+    mode: 'none'
+  }
   /** Additional headers attached to MCP requests. */
   headers: Record<string, string>
   /** Per-tool-call timeout in milliseconds. */

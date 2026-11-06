@@ -82,6 +82,8 @@ kind: "package-reference"
 
 Token 是有界寿命且满足请求 scope 的 opaque Bearer。完整 connection/identity/publication/issuer/resource/discovery/scope/policy 分区隔离加密存储与 single-flight。每个 Token 任务固定不可变 binding，提交和物理发送重新检查代次与本地许可。Linux 内核锁串行持久变更，由持锁 worker 自己写入、fsync、rename 密文；holder 死亡不能让旧父操作复活禁用 fence，stdin 失败也被包含。断开在第一个 await 前停止 admission，持久禁用、取消并 drain 任务，独立报告可信撤销端点结果 confirmed 或 remote_revocation_unconfirmed。资源 401 使当前操作失败而不重放，下一明确操作才可重取。
 
+在 discovery 到期后开始的新操作，会在第一个工具 guard 前重新获取并校验公开元数据与当前 signer lease。结果投影保留现有代次、到期和许可检查；进行中的操作若遇到到期则拒绝输出，不重放业务调用。
+
 Host 专用 `MachineAuthenticationSession` 提供自身连接的脱敏 status() 和 dispose(true)。认证不向模型添加文本或凭据；工具 schema、scope、附件和结果呈现继续沿用下文机制。SDK 精确固定 1.29.0，此模式使用 Streamable HTTP initialize / 2025-11-25，未实现 2026 server/discover。
 
 显式启用的 `management` 与 `management-remote` 入口向 Host 受保护用户客户端提供状态、断开和明确重新启用。它们与既有 Typert Gateway 一起组合；管理 allowlist 默认拒绝所有调用者：

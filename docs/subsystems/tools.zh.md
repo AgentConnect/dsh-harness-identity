@@ -475,6 +475,30 @@ type ObjectJsonSchema = JsonSchemaNode & { type: 'object' }
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.zh.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
 
+<a id="ctxmcpconnections--mcpconnections"></a>
+
+### `ctx.mcpConnections` — `McpConnections`
+
+Host-only registry; bound management capabilities are never model tools.
+
+```ts cordis-catalog
+/** Bind management to an actual installed Host plugin, rechecked on every operation.
+ * @param context - Current Loader-owned manager context, never a consumer name.
+ * @returns A capability restricted to public state and explicit lifecycle actions.
+ */
+bindManager(context: Context): MachineConnectionManager
+
+/** Register a configured connection from its actual MCP Loader context.
+ * @param context - Installed MCP plugin owning the supervisor and signer session.
+ * @param id - Stable Host connection id.
+ * @param connection - Controls closed over the owner context and immutable configuration.
+ * @returns Removal after the owner has quiesced its work.
+ */
+register(context: Context, id: string, connection: ManagedMachineConnection): () => void
+```
+
+Source: [`packages/mcp/mcp-client/src/management.ts`](../../packages/mcp/mcp-client/src/management.ts)
+
 <a id="ctxtools--toolruntime"></a>
 
 ### `ctx.tools` — `ToolRuntime`

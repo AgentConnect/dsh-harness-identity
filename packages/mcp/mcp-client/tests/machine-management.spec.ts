@@ -166,17 +166,22 @@ it.skipIf(process.platform !== 'linux')('withholds a result when discovery expir
   const held = new Promise<void>((resolve) => { release = resolve })
   f.holdTool = async () => { entered = true; await held }
   const pending = b.ctx.tools.execute({ name: 'mcp__managed__identity_get', arguments: {}, callId: ToolCallId('expiring-result'), signal: new AbortController().signal })
-  await vi.waitFor(() => { expect(entered).toBe(true) })
-  const requests = f.requests
-  const leases = f.leases
-  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 300001)
   try {
+    await vi.waitFor(() => { expect(entered).toBe(true) })
+    const requests = f.requests
+    const leases = f.leases
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 300001)
+    try {
+      release()
+      expect((await pending).isError).toBe(true)
+      expect(f.requests).toBe(requests)
+      expect(f.tokens).toBe(1)
+      expect(f.leases).toBe(leases)
+    } finally { clock.mockRestore() }
+  } finally {
     release()
-    expect((await pending).isError).toBe(true)
-    expect(f.requests).toBe(requests)
-    expect(f.tokens).toBe(1)
-    expect(f.leases).toBe(leases)
-  } finally { clock.mockRestore() }
+    await pending
+  }
 })
 
 it.skipIf(process.platform !== 'linux')('uses protected user Remote to stop SDK/tools, retains disabled across Loader restart, and explicitly reauthorizes enablement', async () => {

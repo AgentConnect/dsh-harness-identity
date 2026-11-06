@@ -54,6 +54,7 @@ export { REGION_BEGIN, REGION_END }
  * errors, so the partition can never silently drift from the service API.
  */
 export const SERVICE_PAGE: Record<string, string> = {
+  mcpConnections: 'tools.md',
   agentLoop: 'core.md',
   agentDefaultModel: 'core.md',
   agentPresets: 'core.md',
@@ -687,6 +688,8 @@ export const FOUNDATION_TYPE_NAMES: ReadonlySet<string> = new Set([
 
 /** Project types deliberately documented outside the subsystems catalog. */
 export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
+  MachineConnectionManager: 'Host management capability is owned by packages/mcp/mcp-client/README.md',
+  ManagedMachineConnection: 'Host connection lifecycle contract is owned by packages/mcp/mcp-client/README.md',
   z: 'schemastery schema constructor is owned by vendor/schemastery (vendored upstream)',
   BeginCommandRequest: 'event-local request contract is owned by packages/client/ui-input-trigger/src/types.ts',
   InsertReferenceRequest: 'event-local request contract is owned by packages/client/ui-input-trigger/src/types.ts',
