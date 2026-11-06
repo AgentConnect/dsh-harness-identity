@@ -133,7 +133,7 @@ export class MachineAuthenticationSession {
     this.pending.add(operation)
     try { return await operation } finally { this.pending.delete(operation) }
   }
-  private async dispatch(input: string | URL | Request, init: RequestInit): Promise<Response> {
+  private async currentBinding(): Promise<Binding> {
     await this.initialized
     await this.syncHistory()
     if (!this.binding) throw new Error('connection_disabled')
@@ -143,6 +143,10 @@ export class MachineAuthenticationSession {
     }
     const binding = this.binding
     if (!binding) throw new Error('connection_disabled')
+    return binding
+  }
+  private async dispatch(input: string | URL | Request, init: RequestInit): Promise<Response> {
+    const binding = await this.currentBinding()
     const request = new Request(input, init)
     if (request.url !== binding.target.resource) throw new Error('resource_mismatch')
     if (request.headers.has('host') || request.headers.has('authorization') || request.headers.has('poppy-session') || request.headers.has('dpop')) throw new Error('managed_authentication_header')
@@ -178,17 +182,18 @@ export class MachineAuthenticationSession {
    * @returns Protection for this session's SDK metadata, results and diagnostics.
    */
   outputProtection(): MachineOutputProtection {
-    return { begin: () => this.redactor.begin(), sanitize: value => this.redactor.sanitize(value), assertActive: async () => {
-      await this.initialized
-      const binding = this.binding
-      if (!binding) throw new Error('connection_disabled')
-      await this.assertBinding(binding)
-      await this.store.assertCurrent(binding.generation, binding.partition)
-      await this.syncHistory()
-      await this.assertBinding(binding)
-      await this.store.assertCurrent(binding.generation, binding.partition)
-      this.assertBindingNow(binding)
-    } }
+    return { prepare: async () => { await this.currentBinding() },
+      begin: () => this.redactor.begin(), sanitize: value => this.redactor.sanitize(value), assertActive: async () => {
+        await this.initialized
+        const binding = this.binding
+        if (!binding) throw new Error('connection_disabled')
+        await this.assertBinding(binding)
+        await this.store.assertCurrent(binding.generation, binding.partition)
+        await this.syncHistory()
+        await this.assertBinding(binding)
+        await this.store.assertCurrent(binding.generation, binding.partition)
+        this.assertBindingNow(binding)
+      } }
   }
   private async syncHistory(): Promise<void> {
     try {

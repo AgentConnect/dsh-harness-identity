@@ -4,6 +4,8 @@ import type { MachineSentBearer } from './machine-history.ts'
 
 /** Private callbacks used only by one connection's SDK bridge. */
 export interface MachineOutputProtection {
+  /** Revalidate expired discovery before a new SDK tool operation, never while projecting its result. */
+  prepare?(): Promise<void>
   /** Pin credentials until the SDK operation finishes projecting its output. */
   begin(): () => void
   /** Replace exact known bearer values in strings and JSON property names. */

@@ -399,6 +399,7 @@ function createExecutor(
   return async (args, exec) => {
     const release = protection.begin()
     try {
+      await protection.prepare?.()
       await protection.assertActive()
       const value = await execute(args, exec)
       await protection.assertActive()

@@ -142,6 +142,43 @@ async function boot(allowed = true) {
     machine: [...ctx.loader.entries()].find(value => value.options.id === 'machine')!, manager: [...ctx.loader.entries()].find(value => value.options.id === 'manager')! }
 }
 
+it.skipIf(process.platform !== 'linux').each([true, false])('revalidates expired discovery before a tool call while retaining permission checks (%s)', async (permitted) => {
+  const b = await boot()
+  const execute = () => b.ctx.tools.execute({ name: 'mcp__managed__identity_get', arguments: {}, callId: ToolCallId('expired-target'), signal: new AbortController().signal })
+  expect((await execute()).isError).toBe(false)
+  const requests = f.requests
+  const leases = f.leases
+  const now = Date.now() + 300001
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+  try {
+    f.permitted = permitted
+    expect((await execute()).isError).toBe(!permitted)
+    expect(f.tokens).toBe(permitted ? 2 : 1)
+    if (permitted) expect(f.leases).toBeGreaterThan(leases)
+    else expect(f.requests).toBe(requests)
+  } finally { clock.mockRestore() }
+})
+
+it.skipIf(process.platform !== 'linux')('withholds a result when discovery expires during the tool operation without replay', async () => {
+  const b = await boot()
+  let release!: () => void
+  let entered = false
+  const held = new Promise<void>((resolve) => { release = resolve })
+  f.holdTool = async () => { entered = true; await held }
+  const pending = b.ctx.tools.execute({ name: 'mcp__managed__identity_get', arguments: {}, callId: ToolCallId('expiring-result'), signal: new AbortController().signal })
+  await vi.waitFor(() => { expect(entered).toBe(true) })
+  const requests = f.requests
+  const leases = f.leases
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 300001)
+  try {
+    release()
+    expect((await pending).isError).toBe(true)
+    expect(f.requests).toBe(requests)
+    expect(f.tokens).toBe(1)
+    expect(f.leases).toBe(leases)
+  } finally { clock.mockRestore() }
+})
+
 it.skipIf(process.platform !== 'linux')('uses protected user Remote to stop SDK/tools, retains disabled across Loader restart, and explicitly reauthorizes enablement', async () => {
   const b = await boot()
   expect(await b.call('status', false)).toEqual({ status: 401 })
