@@ -1,4 +1,5 @@
 /** Public machine connection management facts; credentials never cross this interface. @module */
+import type { MachineHistoryRecoveryRule } from './machine-history.ts'
 
 /** Sanitized state of one configured machine connection. */
 export interface MachineConnectionStatus {
@@ -7,6 +8,8 @@ export interface MachineConnectionStatus {
   generation: number
   remoteRevocation: 'not_requested' | 'confirmed' | 'remote_revocation_unconfirmed'
   authentication: 'discovering' | 'binding_ready' | 'token_ready' | 'blocked' | 'stopped'
+  historyState?: 'migration_required' | 'quarantine'
+  migrationId?: string
 }
 
 /** Capability issued to one installed, operator-approved Host manager. */
@@ -23,5 +26,5 @@ export interface MachineConnectionManager {
 export interface ManagedMachineConnection {
   status(): Promise<MachineConnectionStatus>
   disconnect(): Promise<void>
-  enable(authorize: () => void): Promise<void>
+  enable(authorize: () => void, recovery?: MachineHistoryRecoveryRule): Promise<void>
 }

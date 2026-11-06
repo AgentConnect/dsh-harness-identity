@@ -25,6 +25,8 @@ import type { ToolDefinition, ToolExecution, ToolExecutionResult } from '@deepse
 import { assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
 import type { JsonSchemaNode } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
+import type { MachineOutputProtection } from './machine-output.ts'
+import { protectMachineFailure } from './machine-output.ts'
 
 /** Resolved options relevant to tool bridging. */
 export interface ToolBridgeOptions {
@@ -32,6 +34,8 @@ export interface ToolBridgeOptions {
   registrationFailure: 'contain' | 'throw'
   serverName: string
   toolCallTimeoutMs: number
+  /** Private exact bearer protection for this machine connection only. */
+  outputProtection?: MachineOutputProtection
 }
 
 /** State for one sync generation: the current set of disposers keyed by public name. */
@@ -147,14 +151,26 @@ export async function syncTools(
   opts: ToolBridgeOptions,
   previous: ToolDisposers,
 ): Promise<ToolDisposers> {
+  const release = opts.outputProtection?.begin()
+  try { return await syncToolsProtected(client, ctx, opts, previous) }
+  catch (error) {
+    throw await protectMachineFailure(opts.outputProtection, error)
+  } finally { release?.() }
+}
+
+async function syncToolsProtected(
+  client: Client, ctx: Context, opts: ToolBridgeOptions, previous: ToolDisposers,
+): Promise<ToolDisposers> {
   // Phase 1: fetch and build the next generation without touching the registry.
   const definitions = new Map<string, ToolDefinition>()
   const seenCursors = new Set<string>()
   let cursor: string | undefined
   do {
     const response = await listToolsUncached(client, cursor)
+    await opts.outputProtection?.assertActive()
     for (const tool of response.tools) {
-      const publicName = publicToolName(opts.serverName, tool.name)
+      const safe = opts.outputProtection?.sanitize(tool) ?? tool
+      const publicName = publicToolName(opts.serverName, safe.name)
       if (definitions.has(publicName)) {
         throw new Error(
           `mcp-client(${opts.serverName}): server listed tool "${tool.name}" more than once — invalid tool list`,
@@ -165,9 +181,9 @@ export async function syncTools(
         ctx,
         publicName,
         tool.name,
-        tool.description ?? '',
-        tool.inputSchema,
-        supportedOutputSchema(tool.outputSchema),
+        safe.description ?? '',
+        safe.inputSchema,
+        supportedOutputSchema(safe.outputSchema),
         tool.execution?.taskSupport === 'required',
         opts,
       ))
@@ -183,6 +199,8 @@ export async function syncTools(
     }
   } while (cursor)
 
+  await opts.outputProtection?.assertActive()
+
   // Phase 2: swap generations.
   for (const dispose of previous.values()) dispose()
   const disposers: ToolDisposers = new Map()
@@ -195,8 +213,10 @@ export async function syncTools(
     // registration occupies this server's namespace. Roll back so the model
     // sees either the full generation or none of it — never a partial set.
     for (const dispose of disposers.values()) dispose()
-    ctx.logger.error(`mcp-client(${opts.serverName}): tool registration failed, no tools registered: ${String(error)}`)
-    if (opts.registrationFailure === 'throw') throw error
+    const failure = await protectMachineFailure(opts.outputProtection, error)
+    const message = String(failure)
+    ctx.logger.error(`mcp-client(${opts.serverName}): tool registration failed, no tools registered: ${message}`)
+    if (opts.registrationFailure === 'throw') throw failure
     return new Map()
   }
   return disposers
@@ -267,7 +287,7 @@ function createDefinition(
     name: publicName,
     description,
     parameters,
-    output: createOutput(rawName, structuredSchema),
+    output: createOutput(opts.outputProtection?.sanitize(rawName) ?? rawName, structuredSchema),
     execute: createExecutor(client, ctx, rawName, taskRequired, opts, projections),
     finalizeContent(exec: Readonly<ToolExecution>, result: Readonly<ToolExecutionResult>) {
       const projection = projections.get(exec)
@@ -318,7 +338,7 @@ function createExecutor(
   opts: ToolBridgeOptions,
   projections: WeakMap<ToolExecution, PreparedProjection>,
 ): ToolDefinition['execute'] {
-  return async (args: unknown, exec: ToolExecution) => {
+  const execute = async (args: unknown, exec: ToolExecution) => {
     if (taskRequired) {
       throw new Error(`Tool "${rawName}" requires task-based execution, which this bridge does not support`)
     }
@@ -327,7 +347,9 @@ function createExecutor(
     // string/number/null). Fallback to {} lets the MCP server produce a
     // specific "missing required param" error the model can learn from.
     const argsObj = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>
-    const result = await callToolUncached(client, rawName, argsObj, exec, opts)
+    const received = await callToolUncached(client, rawName, argsObj, exec, opts)
+    await opts.outputProtection?.assertActive()
+    const result = opts.outputProtection?.sanitize(received) ?? received
 
     // The SDK may return a legacy `toolResult` shape; normalize to content array.
     if (!Array.isArray(result.content)) {
@@ -364,9 +386,27 @@ function createExecutor(
     if (containsImage(content)) {
       const fallback: ContentBlock[] = [{ type: 'text', text: extractText(content, rawName) }]
       const projected = await prepareImageProjection(ctx, exec, content, rawName)
-      projections.set(exec, { value, fallback, content: projected })
+      await opts.outputProtection?.assertActive()
+      const safeValue = opts.outputProtection?.sanitize(value) ?? value
+      projections.set(exec, { value: safeValue, fallback: opts.outputProtection?.sanitize(fallback) ?? fallback,
+        content: opts.outputProtection?.sanitize(projected) ?? projected })
+      return safeValue
     }
     return value
+  }
+  if (!opts.outputProtection) return execute
+  const protection = opts.outputProtection
+  return async (args, exec) => {
+    const release = protection.begin()
+    try {
+      await protection.assertActive()
+      const value = await execute(args, exec)
+      await protection.assertActive()
+      return protection.sanitize(value)
+    } catch (error) {
+      try { await protection.assertActive() } catch { throw new Error('machine_connection_inactive') }
+      throw new Error(protection.sanitize(error instanceof Error ? error.message : String(error)))
+    } finally { release() }
   }
 }
 

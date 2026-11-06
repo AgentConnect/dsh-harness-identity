@@ -97,6 +97,12 @@ Host 专用 `MachineAuthenticationSession` 提供自身连接的脱敏 status() 
 
 明确断开持久化禁用代次、取消在途工作、关闭 SDK 并移除工具。重载和进程退出保留持久状态。已禁用 row 重载后仍可查询，不联系资源或取得 signer lease。明确重新启用重复公开发现、当前 C 授权和 SDK/工具连接；失败保留禁用 fence。操作归属防止旧启用失败禁用并发后继。重启无法恢复此前远端撤销证明，按未确认报告。这些 Host 入口不提供专用设置卡或 ACP 身份绑定。
 
+机器插件在工具名、描述、schema、结果字符串与 JSON key、错误文本和连接日志中隐藏已知 Bearer 及实际签出的 client assertion。窄范围守卫还识别 C 已确认 client_id 的固定 ES256 客户端认证断言，包括重建后的过期完整断言；其他身份、claim 集合或 token type 的业务 JWT 保留数据。SDK wire 保持原样，异步投影后复核当前 SDK 代次、连接 fence 与 C lease。
+
+Bearer 记录、完整性与迁移资格共用强制认证 envelope，fresh 空 history 也需认证。AES-GCM AAD 绑定 purpose、connection 和当前 Token frame；明文提示字段不决定 history 资格。Bearer 发出前必须完成 history 持久化，输出处理重新读取 history；Token 替换、clear、disable 和 enable 保留已知材料。重启以新的单调时钟，为每个加载的 receipt 保守重新计算完整广告寿命加 30 秒。SDK 在途操作固定保留窗口；到期 receipt 按版本 CAS 清理，保留并发后继、禁用 fence 和重试限制。内存最多保留 256 项、1 MiB；持久 history 最多 256 条，加密前序列化明文上限 1 MiB。满额停止新发送，不丢弃仍可能有效的值。
+
+Schema 2 保留旧版启用状态、generation 和 ciphertext，并把未知历史标为不完整。连接仍公开 historyState 与 migrationId，但 SDK/工具保持停止。解密 key 缺失不会生成新 master 或擦旧 ciphertext；换 connectionId/stateRoot 或只撤销最新 Token 不证明完整历史。Host management 的 legacyRecovery 数组默认空，仅受信运维配置可提供精确 connectionId/migrationId、封闭 kind 和 evidenceRef；Remote 仍只收 connectionId。prior-bearers-invalidated 表示运维证明所有早前 Token 已失效，不是 SDK 验证。old-writers-stopped 还要求该事实之后完整 86431 秒单调隔离，再明确 enable；重建 Host 保守重算隔离。恢复不会隐式启用已禁用连接。
+
 在 Electron 中，内部 Linux 持锁 worker 仅在当前 Host 的 `process.versions.electron` 确认运行环境后显式进入 RunAsNode。它不依赖继承的环境标志，也不改变其他子进程的启动模式。Store 仍需系统提供 `flock` 可执行程序。
 
 ### 工具命名与共存

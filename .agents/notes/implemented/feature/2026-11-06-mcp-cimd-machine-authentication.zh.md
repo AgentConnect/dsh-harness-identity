@@ -22,6 +22,10 @@ Status: implemented
 
 断开先持久化禁用 fence，再等待 Token flight、SDK transport 和工具停止；普通卸载保留状态。重新启用先重新发现并取得当前 C lease，再以 CAS 替换观察到的禁用代次且不保留旧密文。唯一 activation id 允许本地写入结果不确定时条件回滚，不会禁用另一进程成功的新 activation。管理权限跨 await 检查至 SDK 初始化和工具同步完成；脱敏状态区分 binding、Token 与实际 supervisor ready。专用 UI 不属于这些 Host/Remote 入口。
 
+资源已知收到的 Bearer，可回显任意工具数据；同运营的 AS 也可能暴露完整 client assertion。因此连接在 SDK 元数据、canonical 工具值、Native 文本与错误发布前保护已知材料；身份精确匹配的客户端认证 profile 守卫覆盖历史断言，不无限累积过期 JWT。Bearer history 以独立 connection/purpose AAD 加密，在物理发送前提交；异步输出重新加载并复核 SDK 代次、持久 fence 与 C lease。单调完整寿命保留、在途固定、receipt-version CAS 和固定预算防止过早删除或无界增长，不改 SDK envelope。
+
+重启不能从单份最新加密 Token 推断完整历史。Schema 2 保留旧 ciphertext 和启用事实，但阻断 SDK/工具启动。运维恢复规则绑定精确 migration id，不进入模型或用户请求字段。受信失效证明须覆盖所有早前 Token；旧 writer 已停止还要求完整 86431 秒单调隔离，重建后保守重算。猜测时钟、只撤销最新 Token 或换存储 root 均不构成证明；正常 fresh state 立即具备完整 history。
+
 ## Alternatives considered
 
 **读取 opaque scopeKey 的 id 或继承 initiator** 无法证明当前新建 Agent 的身份：setup 期间 initiator 可能是父 Agent，scopeKey 也不承诺属性。连接采用明确的 Host 全局标识和实际 constructor 所有权。

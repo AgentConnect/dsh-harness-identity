@@ -183,8 +183,13 @@ describe.skipIf(process.platform !== 'linux')('machine tokens and transport', ()
     let release!: () => void; let entered!: () => void
     const hold = new Promise<void>((resolve) => { release = resolve })
     const started = new Promise<void>((resolve) => { entered = resolve })
-    const old = new MachineConnectionStore(directory, 'holder-loss', async () => { entered(); await hold; return Buffer.alloc(32, 1) })
+    let blockKey = false; let keyHeld = false
+    const old = new MachineConnectionStore(directory, 'holder-loss', async () => {
+      if (blockKey && !keyHeld) { keyHeld = true; entered(); await hold }
+      return Buffer.alloc(32, 1)
+    })
     const generation = await old.open('partition')
+    blockKey = true
     const pending = old.commit(generation, { token: 'old', partition: 'partition', acquiredAt: Date.now(), expiresAt: Date.now() + 60000, scopes: ['read'] })
     const rejected = expect(pending).rejects.toThrow('connection_store_locked')
     await started
@@ -267,4 +272,31 @@ describe.skipIf(process.platform !== 'linux')('machine tokens and transport', ()
       expect(f.tokenRequests).toHaveLength(0)
     } finally { await f.session.dispose() }
   })
+})
+
+it('rechecks a different process durable fence after the final history/lease await before a physical send', async () => {
+  const f = await fixture(); await f.session.fetch(endpoint)
+  const binding = (f.session as unknown as { binding: { lease: { assertActive(): Promise<void> } } }).binding
+  const lease = binding.lease; const originalLease = lease.assertActive.bind(lease)
+  const originalRemember = MachineConnectionStore.prototype.rememberSent
+  let armed = false; let held = false; let entered!: () => void; let release!: () => void
+  const waiting = new Promise<void>((resolve) => { entered = resolve })
+  const pause = new Promise<void>((resolve) => { release = resolve })
+  const remember = vi.spyOn(MachineConnectionStore.prototype, 'rememberSent').mockImplementation(async function (this: MachineConnectionStore, ...args) {
+    const result = await originalRemember.apply(this, args); armed = true; return result
+  })
+  const checking = vi.spyOn(lease, 'assertActive').mockImplementation(async () => {
+    await originalLease()
+    if (armed && !held) { held = true; entered(); await pause }
+  })
+  const before = f.resourceRequests.length
+  const credentials = f.ctx.get('credentials') as { resolve(ref: string): Promise<{ value: string }> }
+  const other = new MachineConnectionStore(f.stateRoot, f.config.connectionId,
+    async () => Buffer.from((await credentials.resolve(f.config.encryptionKeyRef)).value, 'base64url'))
+  try {
+    const sending = f.session.fetch(endpoint); await waiting
+    await other.disable(); release()
+    await expect(sending).rejects.toThrow('connection_generation_changed')
+    expect(f.resourceRequests.length).toBe(before)
+  } finally { release(); checking.mockRestore(); remember.mockRestore(); await f.session.dispose() }
 })

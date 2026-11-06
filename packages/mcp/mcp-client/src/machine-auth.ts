@@ -8,6 +8,8 @@ import { machineFetch, machineJson, assertMachineDirectRoute } from './machine-h
 import { MachineConnectionStore } from './machine-store.ts'
 import type { MachineToken } from './machine-store.ts'
 import type { MachineAuthentication, MachineIdentityService, MachineSignerLease, MachineTarget } from './machine-types.ts'
+import { MachineBearerRedactor } from './machine-output.ts'
+import type { MachineOutputProtection } from './machine-output.ts'
 
 interface Binding {
   readonly target: MachineTarget
@@ -50,13 +52,15 @@ export class MachineAuthenticationSession {
   private tokenExpiresAt = 0
   private tokenAttempts = 0
   private priorTokenMayRemain = false
+  private issuedSource: string | undefined
   private revocation: 'not_requested' | 'confirmed' | 'remote_revocation_unconfirmed' = 'not_requested'
   private monotonic?: { wall: number; tick: number }
   private readonly startedAt = Date.now()
   private readonly pending = new Set<Promise<unknown>>()
   constructor(ctx: Context, private readonly config: MachineAuthentication, endpoint: string,
     private readonly send: typeof machineFetch = machineFetch,
-    explicitEnable?: { generation: number; authorize: () => void }) {
+    explicitEnable?: { generation: number; authorize: () => void },
+    private readonly redactor = new MachineBearerRedactor()) {
     config = structuredClone(config)
     this.config = config
     this.managementAuthorization = explicitEnable?.authorize
@@ -84,10 +88,13 @@ export class MachineAuthenticationSession {
         try {
           await lease.assertActive()
           const client = await lease.getOAuthClientIdentity()
+          this.redactor.registerIdentity(client.clientId)
           if (client.algorithm !== 'ES256' || client.signerMode !== 'local') throw new Error('unsupported_machine_profile')
           const partition = createHash('sha256').update(JSON.stringify([config.identityRef, client.clientId, client.keyId, client.version,
             target.issuer, target.resource, target.metadataDigest, [...new Set(config.requestedScopes)].sort(), config.mode, config.connectionId, lease.policyGeneration])).digest('hex')
           const requestedEnable = explicitEnable
+          await this.store.inspectHistory()
+          await this.syncHistory()
           const generation = requestedEnable
             ? await this.store.enable(requestedEnable.generation, partition, async () => {
               requestedEnable.authorize()
@@ -98,6 +105,9 @@ export class MachineAuthenticationSession {
             }, this.enableOperationId)
             : await this.store.open(partition)
           explicitEnable = undefined
+          if (this.disposed || this.closing) throw new Error('connection_disabled')
+          await this.syncHistory()
+          await lease.assertActive()
           if (this.disposed || this.closing) throw new Error('connection_disabled')
           const previous = this.binding
           this.tokenReady = false
@@ -125,6 +135,7 @@ export class MachineAuthenticationSession {
   }
   private async dispatch(input: string | URL | Request, init: RequestInit): Promise<Response> {
     await this.initialized
+    await this.syncHistory()
     if (!this.binding) throw new Error('connection_disabled')
     if (Date.now() >= this.binding.target.expiresAt) {
       this.refreshing ??= this.refreshTarget().finally(() => { this.refreshing = undefined })
@@ -141,6 +152,16 @@ export class MachineAuthenticationSession {
     if (this.disposed || this.closing) throw new Error('connection_disabled')
     await this.store.assertCurrent(binding.generation, binding.partition)
     request.headers.set('authorization', `Bearer ${token.token}`)
+    this.redactor.remember(token.token, token.acquiredAt, token.expiresAt - token.acquiredAt)
+    try {
+      const records = await this.store.rememberSent(binding.generation, binding.partition, token, () => this.assertBinding(binding))
+      if (records.some(record => record.source !== this.issuedSource)) this.priorTokenMayRemain = true
+      this.redactor.observe(records)
+    }
+    catch (error) { this.blocked = true; throw error }
+    await this.assertBinding(binding)
+    await this.store.assertCurrent(binding.generation, binding.partition)
+    this.assertBindingNow(binding)
     const response = await this.send(request, { redirect: 'manual', signal: AbortSignal.any([request.signal, this.controller.signal]) })
     if (response.status >= 300 && response.status < 400) { await response.body?.cancel(); throw new Error('credential_redirect_blocked') }
     if (response.status === 401) {
@@ -153,17 +174,46 @@ export class MachineAuthenticationSession {
     if (!response.ok) { await response.body?.cancel(); throw new Error('resource_request_failed_result_unknown') }
     return response
   }
-  private async assertBinding(binding: Binding): Promise<void> {
+  /** Private bridge callbacks; bearer values never leave the redactor.
+   * @returns Protection for this session's SDK metadata, results and diagnostics.
+   */
+  outputProtection(): MachineOutputProtection {
+    return { begin: () => this.redactor.begin(), sanitize: value => this.redactor.sanitize(value), assertActive: async () => {
+      await this.initialized
+      const binding = this.binding
+      if (!binding) throw new Error('connection_disabled')
+      await this.assertBinding(binding)
+      await this.store.assertCurrent(binding.generation, binding.partition)
+      await this.syncHistory()
+      await this.assertBinding(binding)
+      await this.store.assertCurrent(binding.generation, binding.partition)
+      this.assertBindingNow(binding)
+    } }
+  }
+  private async syncHistory(): Promise<void> {
+    try {
+      const expired = this.redactor.expiredReceipts()
+      await this.store.pruneSentHistory(expired)
+      this.redactor.acknowledgePruned(expired)
+      const records = await this.store.sentHistory()
+      if (records.some(record => record.source !== this.issuedSource)) this.priorTokenMayRemain = true
+      this.redactor.observe(records)
+    } catch (error) { this.blocked = true; throw error }
+  }
+  private assertBindingNow(binding: Binding): void {
     this.managementAuthorization?.()
     if (this.disposed || this.closing || this.binding !== binding || Date.now() >= binding.target.expiresAt) throw new Error('connection_generation_changed')
+  }
+  private async assertBinding(binding: Binding): Promise<void> {
+    this.assertBindingNow(binding)
     await binding.lease.assertActive()
-    this.managementAuthorization?.()
-    if (this.disposed || this.closing || this.binding !== binding) throw new Error('connection_generation_changed')
+    this.assertBindingNow(binding)
   }
   private async acquire(binding: Binding): Promise<MachineToken> {
     await this.assertBinding(binding)
     if (this.disposed || this.blocked || Date.now() >= binding.target.expiresAt) throw new Error('target_revalidation_required')
     const token = await this.store.token(binding.generation, binding.partition)
+    if (token) this.redactor.remember(token.token, token.acquiredAt, token.expiresAt - token.acquiredAt)
     const now = Date.now()
     const rollback = this.monotonic && now < this.monotonic.wall + (performance.now() - this.monotonic.tick) - 1000
     this.monotonic = { wall: now, tick: performance.now() }
@@ -209,6 +259,7 @@ export class MachineAuthenticationSession {
     assertMachineDirectRoute(binding.target.tokenEndpoint)
     const client = await binding.lease.getOAuthClientIdentity()
     const assertion = await binding.lease.signOAuthClientAssertion(binding.lease.targetRef)
+    this.redactor.rememberAssertion(assertion)
     const scopes = [...new Set(this.config.requestedScopes)].sort()
     const form = new URLSearchParams({ grant_type: 'client_credentials', client_id: client.clientId,
       client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer', client_assertion: assertion,
@@ -239,7 +290,9 @@ export class MachineAuthenticationSession {
       || value.scope !== undefined && typeof value.scope !== 'string') throw new Error('incompatible_token_response')
     const granted = value.scope === undefined ? scopes : (value.scope as string).split(' ').filter(Boolean)
     if (granted.some(scope => !scopes.includes(scope)) || scopes.some(scope => !granted.includes(scope))) throw new Error('insufficient_scope')
-    const token: MachineToken = { token: value.access_token, acquiredAt,
+    const issueId = randomUUID()
+    this.issuedSource = issueId
+    const token: MachineToken = { token: value.access_token, acquiredAt, issueId,
       expiresAt: acquiredAt + (value.expires_in as number) * 1000, scopes: granted, partition: binding.partition }
     await this.assertBinding(binding)
     if (this.disposed || Date.now() >= token.expiresAt) throw new Error('connection_disabled')
@@ -277,6 +330,10 @@ export class MachineAuthenticationSession {
     try {
       const binding = this.binding
       const token = disconnect && binding ? await this.store.token(binding.generation, binding.partition).catch(() => undefined) : undefined
+      if (disconnect) {
+        try { if ((await this.store.sentHistory()).some(record => record.source !== this.issuedSource)) uncertain = true }
+        catch { uncertain = true }
+      }
       let fenceFailed = false
       try { if (disconnect) await this.store.disable() } catch { fenceFailed = true }
       this.disposed = true; this.controller.abort()
@@ -290,6 +347,9 @@ export class MachineAuthenticationSession {
             await binding.lease.assertActive()
             const client = await binding.lease.getOAuthClientIdentity()
             const assertion = await binding.lease.signOAuthClientAssertion(binding.lease.targetRef)
+            this.redactor.registerIdentity(client.clientId)
+            this.redactor.rememberAssertion(assertion)
+            await binding.lease.assertActive()
             const response = await this.send(binding.target.revocationEndpoint, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(15000),
               headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: token.token, token_type_hint: 'access_token',
                 client_id: client.clientId, client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer', client_assertion: assertion }).toString() })

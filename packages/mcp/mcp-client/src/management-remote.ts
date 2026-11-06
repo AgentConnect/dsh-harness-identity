@@ -18,6 +18,8 @@ const status = z.object({ connectionId,
   generation: z.number().int().nonnegative(),
   remoteRevocation: z.enum(['not_requested', 'confirmed', 'remote_revocation_unconfirmed']),
   authentication: z.enum(['discovering', 'binding_ready', 'token_ready', 'blocked', 'stopped']),
+  historyState: z.enum(['migration_required', 'quarantine']).optional(),
+  migrationId: z.string().regex(/^[A-Za-z0-9-]{16,64}$/u).optional(),
 }).strict()
 
 /** User administration of configured connections; no identity or key selectors cross this API. */

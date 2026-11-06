@@ -1,10 +1,12 @@
 /** Real Loader, authenticated user carrier, Typert and SDK lifecycle; remote identity/AS are fixtures. */
 import { createServer } from 'node:http'
+import { generateKeyPairSync, randomBytes, sign, verify } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { afterEach, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
@@ -22,7 +24,13 @@ import type { MachineConnectionStatus } from '../src/management-types.ts'
 import { MachineConnectionStore } from '../src/machine-store.ts'
 
 const remoteName = '@deepseek-ai/dsh-mcp-client/management-remote'
-const f = vi.hoisted(() => ({ tokens: 0, requests: 0, revocations: 0, leases: 0, permitted: true,
+const f = vi.hoisted(() => ({ tokens: 0, requests: 0, revocations: 0, leases: 0,
+  permitted: true, echo: false, echoName: false, echoError: false, failInit: false,
+  history: [] as string[], assertions: [] as string[], echoProof: false,
+  proofSigner: undefined as (() => string) | undefined, proofVerifier: undefined as ((value: string) => boolean) | undefined,
+  leaseHook: undefined as (() => Promise<void>) | undefined, toolReturned: false, failList: false, foreignError: '',
+  holdSdkError: undefined as (() => Promise<void>) | undefined,
+  holdTool: undefined as (() => Promise<void>) | undefined,
   holdIdentity: undefined as (() => Promise<void>) | undefined, holdToken: undefined as (() => Promise<void>) | undefined }))
 vi.mock('../src/machine-http.ts', async (original) => {
   const value = await original<typeof import('../src/machine-http.ts')>()
@@ -32,18 +40,41 @@ vi.mock('../src/machine-http.ts', async (original) => {
     if (req.url.includes('oauth-protected-resource')) return json({ resource: 'https://resource.example/mcp', authorization_servers: ['https://auth.example'] })
     if (req.url.includes('oauth-authorization-server')) return json({ issuer: 'https://auth.example', token_endpoint: 'https://auth.example/token', revocation_endpoint: 'https://auth.example/revoke', client_id_metadata_document_supported: true, grant_types_supported: ['client_credentials'], token_endpoint_auth_methods_supported: ['private_key_jwt'], token_endpoint_auth_signing_alg_values_supported: ['ES256'] })
     if (req.url === 'https://auth.example/token') {
-      expect(new URLSearchParams(await req.text()).get('grant_type')).toBe('client_credentials')
+      const form = new URLSearchParams(await req.text())
+      expect(form.get('grant_type')).toBe('client_credentials')
+      const assertion = form.get('client_assertion') ?? ''
+      f.assertions.push(assertion)
+      if (f.proofVerifier) expect(f.proofVerifier(assertion)).toBe(true)
       const token = `private-token-${++f.tokens}`; await f.holdToken?.()
       return json({ access_token: token, token_type: 'Bearer', expires_in: 300, scope: 'agent.self.read' })
     }
     if (req.url === 'https://auth.example/revoke') { f.revocations++; return new Response(null, { status: 200 }) }
     if (req.url !== 'https://resource.example/mcp') throw new Error('unexpected_fixture_origin')
     f.requests++
+    const bearer = req.headers.get('authorization')?.replace(/^Bearer /u, '') ?? ''
+    if (bearer && !f.history.includes(bearer)) f.history.push(bearer)
     if (req.method === 'GET' || req.method === 'DELETE') return new Response(null, { status: 405 })
     const body = await req.json() as { id?: number; method: string }
-    if (body.method === 'initialize') return json({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1' } } })
+    if (body.method === 'initialize' && f.failInit || body.method === 'tools/list' && f.failList) {
+      await f.holdSdkError?.()
+      const echo = f.foreignError || bearer
+      return json({ jsonrpc: '2.0', id: body.id, error: { code: -32603, message: `untrusted ${echo}`, data: { [echo]: echo } } })
+    }
+    if (body.method === 'initialize') return json({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: f.echo ? bearer : 'fixture', version: '1' } } })
     if (body.method === 'notifications/initialized') return new Response(null, { status: 202 })
-    if (body.method === 'tools/list') return json({ jsonrpc: '2.0', id: body.id, result: { tools: [{ name: 'identity_get', description: 'Read machine identity.', inputSchema: { type: 'object' } }] } })
+    if (body.method === 'tools/list') return json({ jsonrpc: '2.0', id: body.id, result: { tools: [{ name: f.echoName ? `identity_${bearer}` : 'identity_get', description: f.echo ? `business ${bearer}` : 'Read machine identity.', inputSchema: { type: 'object', ...(f.echo ? { description: bearer, properties: { [bearer]: { type: 'string', description: bearer } } } : {}) } }] } })
+    if (f.echoName && body.method === 'tools/call') expect((body as { params?: { name?: string } }).params?.name).toBe(`identity_${f.history[0]}`)
+    await f.holdTool?.()
+    f.toolReturned = true
+    if (f.echoProof) return json({ jsonrpc: '2.0', id: body.id, result: {
+      content: [{ type: 'text', text: `ordinary proof=${f.assertions[0]}` }],
+      structuredContent: { unrelated: f.assertions[0], [f.assertions[0]!]: true }, ...(f.echoError ? { isError: true } : {}),
+    } })
+    if (f.echo) return json({ jsonrpc: '2.0', id: body.id, result: {
+      content: [{ type: 'text', text: `business current=${bearer} historical=${f.history[0]}` }],
+      structuredContent: { unrelated_property: bearer, [bearer]: 'private-key-value', previous: f.history[0], '■■■': 'ordinary-collision' },
+      ...(f.echoError ? { isError: true } : {}),
+    } })
     return json({ jsonrpc: '2.0', id: body.id, result: { content: [{ type: 'text', text: 'machine' }] } })
   } }
 })
@@ -54,7 +85,11 @@ afterEach(async () => {
   await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose()))
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))))
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
-  Object.assign(f, { tokens: 0, requests: 0, revocations: 0, leases: 0, permitted: true, holdIdentity: undefined, holdToken: undefined })
+  Object.assign(f, { tokens: 0, requests: 0, revocations: 0, leases: 0, permitted: true,
+    echo: false, echoName: false, echoError: false, failInit: false, history: [],
+    holdTool: undefined, holdIdentity: undefined, holdToken: undefined, assertions: [], echoProof: false,
+    proofSigner: undefined, proofVerifier: undefined, leaseHook: undefined, toolReturned: false,
+    failList: false, foreignError: '', holdSdkError: undefined })
 })
 async function boot(allowed = true) {
   const root = await mkdtemp(join(tmpdir(), 'mcp-managed-host-')); roots.push(root)
@@ -76,9 +111,9 @@ async function boot(allowed = true) {
       f.leases++
       if (!f.permitted) throw new Error('fixture_permission_denied')
       const targetRef = Object.freeze({})
-      return { targetRef, policyGeneration: f.leases, assertActive: async () => { if (!f.permitted) throw new Error('fixture_permission_denied') },
+      return { targetRef, policyGeneration: f.leases, assertActive: async () => { if (!f.permitted) throw new Error('fixture_permission_denied'); await f.leaseHook?.() },
         getOAuthClientIdentity: async () => { await f.holdIdentity?.(); return { clientId: 'https://identity.example/client.json', algorithm: 'ES256', signerMode: 'local', keyId: 'key', version: 1 } },
-        signOAuthClientAssertion: async () => 'fixture-assertion', dispose() {} }
+        signOAuthClientAssertion: async () => f.proofSigner?.() ?? 'fixture-assertion', dispose() {} }
     } }) } as never)
   } }
   const config = join(root, 'cordis.yml')
@@ -268,3 +303,191 @@ it.skipIf(process.platform !== 'linux')('reports blocked and unconfirmed when du
     expect(await b.call('disconnect')).toMatchObject({ ok: true, value: { state: 'disconnected' } })
   } finally { failing.mockRestore() }
 })
+
+it.skipIf(process.platform !== 'linux')('protects actual Loader SDK tool schemas, arbitrary result keys/values and historical bearer echoes', async () => {
+  f.echo = true
+  const b = await boot()
+  const execute = () => b.ctx.tools.execute({ name: 'mcp__managed__identity_get', arguments: {}, callId: ToolCallId('echo'), signal: new AbortController().signal })
+  const first = await execute()
+  expect(first.isError).toBe(false)
+  expect(JSON.stringify(first).includes('business')).toBe(true)
+  expect(JSON.stringify(b.ctx.tools.schemas()).includes(f.history[0]!)).toBe(false)
+  expect(JSON.stringify(first).includes(f.history[0]!)).toBe(false)
+  const structured = (first as { value?: { structuredContent?: Record<string, unknown> } }).value?.structuredContent
+  expect(Object.values(structured ?? {}).includes('ordinary-collision')).toBe(true)
+  await b.call('disconnect'); await b.call('enable')
+  expect(f.tokens).toBe(2)
+  const second = await execute()
+  for (const token of f.history) expect(JSON.stringify(second).includes(token)).toBe(false)
+  f.echoError = true
+  const error = await execute()
+  expect(error.isError).toBe(true)
+  for (const token of f.history) {
+    expect(JSON.stringify(error).includes(token)).toBe(false)
+    expect(JSON.stringify(b.ctx.logger.buffer).includes(token)).toBe(false)
+  }
+})
+
+it.skipIf(process.platform !== 'linux')('contains SDK initialize error echoes in both startup causes and Host logs', async () => {
+  f.failInit = true
+  let failure: unknown
+  try { await boot() } catch (error) { failure = error }
+  expect(failure).toBeDefined()
+  const ctx = contexts.at(-1)!
+  const observed = JSON.stringify(ctx.logger.buffer) + String(failure) + String((failure as Error)?.cause)
+  for (const token of f.history) expect(observed.includes(token)).toBe(false)
+  expect(f.history.length).toBeGreaterThan(0)
+})
+
+it.skipIf(process.platform !== 'linux')('rejects a late SDK result after current C permission is revoked', async () => {
+  f.echo = true
+  const b = await boot()
+  let entered!: () => void; let release!: () => void
+  const waiting = new Promise<void>((resolve) => { entered = resolve })
+  const held = new Promise<void>((resolve) => { release = resolve })
+  f.holdTool = async () => { entered(); await held }
+  const result = b.ctx.tools.execute({ name: 'mcp__managed__identity_get', arguments: {}, callId: ToolCallId('late-revocation'), signal: new AbortController().signal })
+  await waiting; f.permitted = false; release()
+  const received = await result
+  expect(received.isError).toBe(true)
+  expect(JSON.stringify(received).includes('business current=')).toBe(false)
+  for (const token of f.history) expect(JSON.stringify(received).includes(token)).toBe(false)
+})
+
+it.skipIf(process.platform !== 'linux')('rejects a late SDK result after explicit connection disablement', async () => {
+  f.echo = true
+  const b = await boot()
+  let entered!: () => void; let release!: () => void
+  const waiting = new Promise<void>((resolve) => { entered = resolve })
+  const held = new Promise<void>((resolve) => { release = resolve })
+  f.holdTool = async () => { entered(); await held }
+  const result = b.ctx.tools.execute({ name: 'mcp__managed__identity_get', arguments: {}, callId: ToolCallId('late-disable'), signal: new AbortController().signal })
+  await waiting
+  const disconnecting = b.call('disconnect')
+  await expect.poll(async () => (await b.store.state())!.active).toBe(false)
+  release()
+  expect((await result).isError).toBe(true)
+  expect(await disconnecting).toMatchObject({ ok: true, value: { state: 'disconnected' } })
+  for (const token of f.history) expect(JSON.stringify(await result).includes(token)).toBe(false)
+})
+
+it.skipIf(process.platform !== 'linux')('keeps an echoed bearer out of model-facing tool names without changing the raw SDK name', async () => {
+  f.echo = true; f.echoName = true
+  const b = await boot()
+  const schema = b.ctx.tools.schemas().find(tool => tool.name.startsWith('mcp__managed__'))!
+  for (const token of f.history) expect(JSON.stringify(schema).includes(token)).toBe(false)
+  const received = await b.ctx.tools.execute({ name: schema.name, arguments: {}, callId: ToolCallId('safe-name'), signal: new AbortController().signal })
+  expect(received.isError).toBe(false)
+  for (const token of f.history) expect(JSON.stringify(received).includes(token)).toBe(false)
+})
+
+it.skipIf(process.platform !== 'linux')('keeps a legacy connection visible but blocks SDK/tools and ignores user-submitted recovery claims', async () => {
+  const b = await boot()
+  await b.machine.update({ disabled: true })
+  const { readdir, readFile } = await import('node:fs/promises')
+  const entries = await readdir((b.store as unknown as { root: string }).root)
+  const file = join((b.store as unknown as { root: string }).root, entries.find(name => name.endsWith('.json'))!)
+  const row = JSON.parse(await readFile(file, 'utf8'))
+  row.schema = 1; delete row.historyVersion; delete row.history
+  await writeFile(file, JSON.stringify(row), { mode: 0o600 })
+  const before = f.tokens
+  await b.machine.update({ disabled: false })
+  const status = await b.call('status')
+  expect(status).toMatchObject({ ok: true, value: { state: 'blocked', authentication: 'stopped', historyState: 'migration_required' } })
+  expect(f.tokens).toBe(before)
+  expect(b.ctx.tools.get('mcp__managed__identity_get')).toBeUndefined()
+  expect(await b.call('enable', true, { connectionId: 'managed', validated: true, priorBearersInvalidated: true })).toMatchObject({ ok: false })
+  expect((await b.store.state())!.active).toBe(true)
+  expect(f.tokens).toBe(before)
+})
+
+it.skipIf(process.platform !== 'linux')('protects actual signed client assertions echoed by the AS/RS after the machine plugin is reconstructed', async () => {
+  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+  f.echoProof = true
+  f.proofSigner = () => {
+    const now = Math.floor(Date.now() / 1000)
+    const input = Buffer.from(JSON.stringify({ alg: 'ES256', typ: 'JWT', kid: 'key' })).toString('base64url') + '.'
+      + Buffer.from(JSON.stringify({ iss: 'https://identity.example/client.json', sub: 'https://identity.example/client.json',
+        aud: 'https://auth.example', iat: now, exp: now + 60, jti: randomBytes(18).toString('base64url') })).toString('base64url')
+    return input + '.' + sign('sha256', Buffer.from(input), { key: privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url')
+  }
+  f.proofVerifier = (assertion) => {
+    const parts = assertion.split('.')
+    return verify('sha256', Buffer.from(parts[0] + '.' + parts[1]), { key: publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(parts[2] ?? '', 'base64url'))
+  }
+  const b = await boot()
+  const execute = () => b.ctx.tools.execute({ name: 'mcp__managed__identity_get', arguments: {}, callId: ToolCallId('proof'), signal: new AbortController().signal })
+  expect(JSON.stringify(await execute()).includes(f.assertions[0]!)).toBe(false)
+  await b.machine.update({ disabled: true }); await b.machine.update({ disabled: false })
+  expect(f.assertions.length).toBe(2)
+  const afterReload = await execute()
+  expect(afterReload.isError).toBe(false)
+  expect(JSON.stringify(afterReload).includes(f.assertions[0]!)).toBe(false)
+  f.echoError = true
+  const failure = await execute()
+  expect(failure.isError).toBe(true)
+  expect(JSON.stringify(failure).includes(f.assertions[0]!)).toBe(false)
+  for (const proof of f.assertions) expect(JSON.stringify(b.ctx.logger.buffer).includes(proof)).toBe(false)
+})
+
+it.skipIf(process.platform !== 'linux')('returns no late SDK business value after another Store disables during the final lease await', async () => {
+  const b = await boot()
+  const original = MachineConnectionStore.prototype.sentHistory
+  let armed = false; let held = false; let entered!: () => void; let release!: () => void
+  const waiting = new Promise<void>((resolve) => { entered = resolve })
+  const pause = new Promise<void>((resolve) => { release = resolve })
+  const loading = vi.spyOn(MachineConnectionStore.prototype, 'sentHistory').mockImplementation(async function (this: MachineConnectionStore) {
+    const records = await original.call(this); if (f.toolReturned) armed = true; return records
+  })
+  f.leaseHook = async () => { if (armed && !held) { held = true; entered(); await pause } }
+  const other = new MachineConnectionStore((b.store as unknown as { root: string }).root, 'managed', async () => Buffer.alloc(32, 29))
+  try {
+    const execution = b.ctx.tools.execute({ name: 'mcp__managed__identity_get', arguments: {}, callId: ToolCallId('durable-output-fence'), signal: new AbortController().signal })
+    await waiting; await other.disable(); release()
+    const result = await execution
+    expect(result.isError).toBe(true)
+    expect('value' in result).toBe(false)
+    expect(result.content.some(block => block.type === 'text' && block.text === 'machine')).toBe(false)
+  } finally { release(); loading.mockRestore(); f.leaseHook = undefined }
+})
+
+for (const stage of ['initialize', 'tools/list'] as const) {
+  it.skipIf(process.platform !== 'linux')(`reloads cross-process bearer history before ${stage} SDK error logging`, async () => {
+    const original = MachineConnectionStore.prototype.open
+    let owner: { root: string; partition: string; generation: number } | undefined
+    const opening = vi.spyOn(MachineConnectionStore.prototype, 'open').mockImplementation(async function (this: MachineConnectionStore, partition) {
+      const generation = await original.call(this, partition)
+      owner = { root: (this as unknown as { root: string }).root, partition, generation }; return generation
+    })
+    let entered!: () => void; let release!: () => void
+    const waiting = new Promise<void>((resolve) => { entered = resolve })
+    const pause = new Promise<void>((resolve) => { release = resolve })
+    f.failInit = stage === 'initialize'; f.failList = stage === 'tools/list'
+    f.holdSdkError = async () => { entered(); await pause }
+    const starting = boot(); void starting.catch(() => {})
+    try {
+      await waiting
+      expect(Boolean(owner)).toBe(true)
+      const location = owner!
+      const other = new MachineConnectionStore(location.root, 'managed', async () => Buffer.alloc(32, 29))
+      const secret = randomBytes(32).toString('base64url'); const now = Date.now()
+      await other.rememberSent(location.generation, location.partition, { token: secret, issueId: 'another-process-issue', acquiredAt: now,
+        expiresAt: now + 300000, partition: location.partition, scopes: ['agent.self.read'] }, async () => {})
+      f.foreignError = secret; release()
+      let failure: unknown
+      try { await starting } catch (error) { failure = error }
+      expect(Boolean(failure)).toBe(true)
+      const messages: string[] = []; const pending: unknown[] = [failure]
+      while (pending.length) {
+        const value = pending.pop()
+        if (value instanceof Error) {
+          messages.push(value.message, value.stack ?? '')
+          if (value.cause) pending.push(value.cause)
+          if (value instanceof AggregateError) pending.push(...value.errors)
+        }
+      }
+      expect(messages.join('\n').includes(secret)).toBe(false)
+      expect(JSON.stringify(contexts.at(-1)!.logger.buffer).includes(secret)).toBe(false)
+    } finally { release(); opening.mockRestore() }
+  })
+}

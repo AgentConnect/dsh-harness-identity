@@ -23,6 +23,8 @@ import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { createTransport } from './transport.ts'
 import { syncTools } from './tools.ts'
 import type { ToolBridgeOptions, ToolDisposers } from './tools.ts'
+import type { MachineOutputProtection } from './machine-output.ts'
+import { protectMachineFailure } from './machine-output.ts'
 import type { Config } from './index.ts'
 
 /** Automatic reconnect policy for one MCP server connection. */
@@ -121,18 +123,21 @@ export interface ConnectionHandle {
  * @param ctx - Cordis context providing the `tools` registry and logger.
  * @param config - Resolved plugin config selecting the transport and server identity.
  * @param transportFactory - Creates an authenticated transport for each connection generation.
+ * @param outputProtection - Private exact bearer protection for this machine connection.
  * @param policy - Resolved reconnect policy from {@link resolveReconnectPolicy}.
  * @returns Handle with a `ready` promise for startup-await and a `dispose` for teardown.
  */
 export function startConnection(
   ctx: Context, config: Config, policy: ResolvedReconnectPolicy,
   transportFactory: () => Transport = () => createTransport(config),
+  outputProtection?: MachineOutputProtection,
 ): ConnectionHandle {
   const label = `mcp-client(${config.serverName})`
   const opts: ToolBridgeOptions = {
     registrationFailure: 'contain',
     serverName: config.serverName,
     toolCallTimeoutMs: config.toolCallTimeoutMs,
+    ...(outputProtection ? { outputProtection } : {}),
   }
   // The initial sync uses 'throw' when failOnStartupError is configured, so
   // a registration conflict propagates to the startup-await path. Re-syncs
@@ -169,7 +174,13 @@ export function startConnection(
   function enqueueSync(generation: Client, syncOpts: ToolBridgeOptions = opts): Promise<void> {
     const run = syncChain.then(async () => {
       if (!isCurrent(generation)) return
-      disposers = await syncTools(generation, ctx, syncOpts, disposers)
+      const protectedOpts = outputProtection ? { ...syncOpts, outputProtection: {
+        ...outputProtection, assertActive: async () => {
+          await outputProtection.assertActive()
+          if (!isCurrent(generation)) throw new Error('connection_generation_changed')
+        },
+      } } : syncOpts
+      disposers = await syncTools(generation, ctx, protectedOpts, disposers)
     })
     // The chain tail must survive a failed sync; the enqueuing caller owns reporting.
     syncChain = run.catch(() => {})
@@ -242,6 +253,11 @@ export function startConnection(
    * @param startup - Whether this is the plugin's activation attempt.
    */
   async function connectGeneration(startup: boolean): Promise<void> {
+    const release = outputProtection?.begin()
+    try { await connectProtectedGeneration(startup) } finally { release?.() }
+  }
+
+  async function connectProtectedGeneration(startup: boolean): Promise<void> {
     const generation = new Client(
       { name: 'dsh-mcp-client', version: '0.0.1' },
       { capabilities: {} },
@@ -271,7 +287,8 @@ export function startConnection(
         } catch (error) {
           // Fetch-phase failure: the previous generation is still registered
           // and `disposers` still owns it — keep serving the last good list.
-          if (!disposed) ctx.logger.error(`${label}: tool re-sync failed: ${String(error)}`)
+          const message = String(await protectMachineFailure(outputProtection, error))
+          if (!disposed) ctx.logger.error(`${label}: tool re-sync failed: ${message}`)
         }
       },
     )
@@ -284,10 +301,11 @@ export function startConnection(
       }
       await enqueueSync(generation, startup ? startupOpts : opts)
     } catch (error) {
-      if (firstAttemptError === undefined) firstAttemptError = error
+      const failure = await protectMachineFailure(outputProtection, error)
+      if (firstAttemptError === undefined) firstAttemptError = failure
       // Disposal clears current ownership before it closes the generation, so
       // only a live supervisor reports an attempt failure.
-      if (isCurrent(generation)) ctx.logger.warn(`${label}: connection attempt failed: ${String(error)}`)
+      if (isCurrent(generation)) ctx.logger.warn(`${label}: connection attempt failed: ${String(failure)}`)
       try { await generation.close() } catch { /* transport already gone */ }
       const quiesced = hasClosed() || await waitForClose(closed.promise)
       attemptSettled = true

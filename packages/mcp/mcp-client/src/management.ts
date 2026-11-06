@@ -2,16 +2,18 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { ManagedMachineConnection, MachineConnectionManager } from './management-types.ts'
+import type { MachineHistoryRecoveryRule } from './machine-history.ts'
 
 export type { MachineConnectionManager, MachineConnectionStatus } from './management-types.ts'
 
 /** Installed Host plugins allowed to manage machine connections. Empty denies all managers. */
-export interface Config { managerConsumers: string[] }
+export interface Config { managerConsumers: string[]; legacyRecovery?: MachineHistoryRecoveryRule[] }
 interface Entry { options: { name: string }; disabled?: boolean; fiber?: { ctx?: Context; state: number } }
 function sameFiber(entry: Entry, ctx: Context): boolean { return (entry.fiber?.ctx?.fiber ?? entry.fiber) === ctx.fiber }
 
 /** Closed management refusal reasons, safe for authenticated user responses. */
-export type MachineManagementRefusal = 'manager_forbidden' | 'invalid_connection_id' | 'connection_unavailable' | 'operation_failed'
+export type MachineManagementRefusal = 'manager_forbidden' | 'invalid_connection_id' | 'connection_unavailable'
+  | 'operation_failed' | 'history_migration_required' | 'history_quarantine_required'
 /** A management refusal containing no external error text. */
 export class MachineManagementError extends Error {
   constructor(readonly code: MachineManagementRefusal) { super(code); this.name = 'MachineManagementError' }
@@ -22,14 +24,21 @@ declare module '@deepseek-ai/cordis' { interface Context { mcpConnections: McpCo
 /** Host-only registry; bound management capabilities are never model tools. */
 export class McpConnections extends Service {
   static inject = ['loader']
-  static Config: z<Config> = z.object({ managerConsumers: z.array(String).default([]) })
+  static Config: z<Config> = z.object({ managerConsumers: z.array(String).default([]), legacyRecovery: z.array(z.object({
+    connectionId: z.string().required().pattern(/^[A-Za-z0-9_-]{1,128}$/u),
+    migrationId: z.string().required().pattern(/^[A-Za-z0-9-]{16,64}$/u),
+    kind: z.union(['old-writers-stopped', 'prior-bearers-invalidated']).required(),
+    evidenceRef: z.string().required().pattern(/^[A-Za-z0-9_.:-]{1,128}$/u),
+  })).default([]) })
   private readonly hostContext: Context
   private readonly records = new Map<string, { context: Context; connection: ManagedMachineConnection }>()
   private readonly managers: Set<string>
+  private readonly recovery: readonly MachineHistoryRecoveryRule[]
   constructor(ctx: Context, config: Config) {
     super(ctx, 'mcpConnections')
     this.hostContext = ctx
     this.managers = new Set(config.managerConsumers)
+    this.recovery = structuredClone(config.legacyRecovery ?? [])
   }
   private authorize(context: Context): void {
     const loader = this.hostContext.get('loader') as { entries(): Iterable<Entry> } | undefined
@@ -68,7 +77,10 @@ export class McpConnections extends Service {
         const authorize = () => {
           if (record(id) !== value) throw new MachineManagementError('connection_unavailable')
         }
-        await value.connection.enable(authorize)
+        const state = await value.connection.status()
+        authorize()
+        const recovery = this.recovery.find(rule => rule.connectionId === id && rule.migrationId === state.migrationId)
+        await value.connection.enable(authorize, recovery)
         authorize()
         return value.connection.status()
       },
