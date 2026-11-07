@@ -262,7 +262,7 @@ SDK 通过旧版通知或现代协议订阅接收工具列表变化。监督器�
 
 机器 HTTPS 使用既有 Host `proxyRouteFor` 权威政策。当前 profile 只实现验证后 DNS pin 的 direct 连接；active proxy route 在身份准入或签名前报 proxy_egress_unsupported，不会暗中直连。NO_PROXY 目标仍执行 direct 地址/TLS 检查。既有 stdio 和非机器 HTTP 代理路径保持原行为。每次 direct 请求固定已验证公网 DNS 到新 TLS socket，限制 DNS/upload/response 等待和大小，拒绝凭据重定向，并校验精确 JSON MIME、重复成员、UTF-8、BOM。
 
-Token 是有界寿命且满足请求 scope 的 opaque Bearer。完整 connection/identity/publication/issuer/resource/discovery/scope/policy 分区隔离加密存储与 single-flight。每个 Token 任务固定不可变 binding，提交和物理发送重新检查代次与本地许可。Linux 内核锁串行持久变更，由持锁 worker 自己写入、fsync、rename 密文；holder 死亡不能让旧父操作复活禁用 fence，stdin 失败也被包含。断开在第一个 await 前停止 admission，持久禁用、取消并 drain 任务，独立报告可信撤销端点结果 confirmed 或 remote_revocation_unconfirmed。资源 401 使当前操作失败而不重放，下一明确操作才可重取。
+Token 是有界寿命且满足请求 scope 的 opaque Bearer。完整 connection/identity/publication/issuer/resource/discovery/scope/policy 分区隔离加密存储与 single-flight。每个 Token 任务固定不可变 binding，提交和物理发送重新检查代次与本地许可。复用 Harness 文件锁在当前 Host 进程内串行更新，并用原子文件替换写入密文；不再需要 Linux flock 命令或持锁子进程。采用既有本地文件语义，不额外增加断电持久化保证。断开在第一个 await 前停止 admission，持久禁用、取消并 drain 任务，独立报告可信撤销端点结果 confirmed 或 remote_revocation_unconfirmed。资源 401 使当前操作失败而不重放，下一明确操作才可重取。
 
 在 discovery 到期后开始的新操作，会在第一个工具 guard 前重新获取并校验公开元数据与当前 signer lease。结果投影保留现有代次、到期和许可检查；进行中的操作若遇到到期则拒绝输出，不重放业务调用。
 
@@ -287,7 +287,6 @@ Bearer 记录、完整性与迁移资格共用强制认证 envelope，fresh 空 
 
 Schema 2 保留旧版启用状态、generation 和 ciphertext，并把未知历史标为不完整。连接仍公开 historyState 与 migrationId，但 SDK/工具保持停止。解密 key 缺失不会生成新 master 或擦旧 ciphertext；换 connectionId/stateRoot 或只撤销最新 Token 不证明完整历史。Host management 的 legacyRecovery 数组默认空，仅受信运维配置可提供精确 connectionId/migrationId、封闭 kind 和 evidenceRef；Remote 仍只收 connectionId。prior-bearers-invalidated 表示运维证明所有早前 Token 已失效，不是 SDK 验证。old-writers-stopped 还要求该事实之后完整 86431 秒单调隔离，再明确 enable；重建 Host 保守重算隔离。恢复不会隐式启用已禁用连接。
 
-在 Electron 中，内部 Linux 持锁 worker 仅在当前 Host 的 `process.versions.electron` 确认运行环境后显式进入 RunAsNode。它不依赖继承的环境标志，也不改变其他子进程的启动模式。Store 仍需系统提供 `flock` 可执行程序。
 
 ### 工具命名与共存
 
@@ -312,3 +311,7 @@ Schema 2 保留旧版启用状态、generation 和 ciphertext，并把未知历�
 服务器连接断开时——例如本地服务器进程崩溃——插件会以从 500 ms 起逐次翻倍、上限 30 s 的延迟自动重连，并刷新工具集；重连进度在日志中可见。中断期间最后已知的工具仍会列出，但对它们的调用会失败，直到服务器恢复。连续失败十次后，该服务器的工具会被移除，重连停止，直到你重载配置或重启 harness；服务器持续连接一段时间后，该计数会重置。设置 `reconnect.enabled: false` 可禁用自动重连——此时工具在断开后仍会列出，但调用失败，直到你重载。编辑配置项会在原地重载服务器连接，未变的名称保持不变。
 
 -----
+
+缓存继续使用 AES-256-GCM 加密；32 字节密钥通过 `authentication.encryptionKeyRef` 指定的 Host 凭据引用读取，不写入缓存文件。macOS/Linux 新建目录和文件使用 0700/0600；Windows 与默认本地凭据 provider 一样依赖 Host 用户目录 ACL，不将 POSIX mode 位当作 Windows 权限检查。既有加密文件格式和连接代次保持兼容。
+
+升级旧 Linux 缓存时，先停止所有旧 Host，再删除遗留的空 `<cache>.json.lock` 文件，保留加密 JSON。新版锁文件包含 PID，不要删除活动锁。新建 profile 不需要这一步。

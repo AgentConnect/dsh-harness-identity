@@ -52,7 +52,7 @@ afterEach(async () => {
   directory = undefined; requests.splice(0); tokens.splice(0)
 })
 
-it.skipIf(process.platform !== 'linux')('loads explicit machine mode, discovers through the actual SDK, renders a safe result and removes tools on disposal', async () => {
+it('loads explicit machine mode, discovers through the actual SDK, renders a safe result and removes tools on disposal', async () => {
   directory = await mkdtemp(join(tmpdir(), 'mcp-machine-loader-'))
   const config = join(directory, 'cordis.yml')
   await writeFile(config, `- name: '@deepseek-ai/dsh-system-prompt'\n- name: '@deepseek-ai/dsh-tools'\n- name: '@fixture/machine-host'\n- name: '@deepseek-ai/dsh-mcp-client'\n  config:\n    serverName: machine\n    transport: streamable-http\n    url: https://resource.example/mcp\n    failOnStartupError: true\n    reconnect:\n      enabled: false\n    authentication:\n      mode: cimd-client-credentials\n      connectionId: stable-machine\n      identityRef: { storeId: store, identityId: identity, did: 'did:web:agent.example' }\n      policyRef: approved-policy\n      requestedScopes: [agent.self.read]\n      stateRoot: ${JSON.stringify(join(directory, 'secrets'))}\n      encryptionKeyRef: MCP_STORE_KEY\n`)
@@ -79,7 +79,7 @@ it.skipIf(process.platform !== 'linux')('loads explicit machine mode, discovers 
 })
 
 
-it.skipIf(process.platform !== 'linux')('keeps real Loader scopes independent while enforcing Host-wide machine connection ids', async () => {
+it('keeps real Loader scopes independent while enforcing Host-wide machine connection ids', async () => {
   directory = await mkdtemp(join(tmpdir(), 'mcp-machine-scopes-'))
   const stateRoot = join(directory, 'secrets')
   const files = ['scope-one', 'scope-two', 'scope-duplicate'].map(name => join(directory!, name + '.yml'))

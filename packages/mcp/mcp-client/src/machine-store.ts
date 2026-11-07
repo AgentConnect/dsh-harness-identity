@@ -1,10 +1,8 @@
 /** Encrypted, cross-process fenced machine connection storage. @module */
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, stat } from 'node:fs/promises'
+import { mkdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { spawn } from 'node:child_process'
-import { createInterface } from 'node:readline'
-import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
+import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { MACHINE_HISTORY_BYTES, MACHINE_HISTORY_COUNT, MACHINE_TOKEN_MAX_LIFETIME } from './machine-history.ts'
 import type { MachineSentBearer } from './machine-history.ts'
 
@@ -48,12 +46,11 @@ export interface MachineStoreState {
 /** Stores encrypted credentials separately for one persistent connection id. */
 export class MachineConnectionStore {
   private readonly file: string
-  private readonly lock: string
   private readonly historyPurpose: string
   constructor(private readonly root: string, connectionId: string, private readonly key: () => Promise<Buffer>) {
     if (!/^[A-Za-z0-9_-]{1,128}$/u.test(connectionId)) throw new Error('invalid_connection_id')
     const digest = createHash('sha256').update(connectionId).digest('hex')
-    this.file = join(root, digest + '.json'); this.lock = this.file + '.lock'
+    this.file = join(root, digest + '.json')
     this.historyPurpose = `@deepseek-ai/dsh-mcp-client/sent-bearer-history/1:${digest}`
   }
   private view(row: Row, history?: History): MachineStoreState {
@@ -421,7 +418,8 @@ export class MachineConnectionStore {
   private async read(): Promise<Row | undefined> {
     try {
       const info = await stat(this.file)
-      if (info.size > 2097152 || (info.mode & 0o077) !== 0) throw new Error()
+      if (info.size > 2097152
+        || (process.platform !== 'win32' && (info.mode & 0o077) !== 0)) throw new Error()
       const row = JSON.parse(await readFile(this.file, 'utf8')) as Row
       if (![1, 2].includes(row.schema) || !Number.isSafeInteger(row.generation) || typeof row.active !== 'boolean' || typeof row.partition !== 'string') throw new Error()
       if (row.cipherGeneration !== undefined && !Number.isSafeInteger(row.cipherGeneration)) throw new Error()
@@ -433,63 +431,20 @@ export class MachineConnectionStore {
     }
   }
   private async transaction<T>(run: (write: (row: Row) => Promise<void>) => Promise<T>): Promise<T> {
-    if (process.platform !== 'linux') throw new Error('machine_store_platform_unsupported')
     await mkdir(this.root, { recursive: true, mode: 0o700 })
-    const lockFile = await open(this.lock, 'a', 0o600); await lockFile.close()
-    // The process holding the kernel lock performs every rename. A killed holder cannot later revive an old fence.
-    const script = String.raw`
-      const fs = require('node:fs/promises');
-      const { randomUUID } = require('node:crypto');
-      const lines = require('node:readline').createInterface({ input: process.stdin });
-      const target = process.argv[1], root = process.argv[2];
-      const emit = value => process.stdout.write(value + String.fromCharCode(10));
-      emit('locked');
-      let chain = Promise.resolve();
-      lines.on('line', line => { chain = chain.then(async () => {
-        const value = JSON.parse(line), temporary = target + '.' + randomUUID();
-        const file = await fs.open(temporary, 'wx', 0o600);
-        try { await file.writeFile(value); await file.sync(); } finally { await file.close(); }
-        try { await fs.rename(temporary, target); } finally { await fs.unlink(temporary).catch(() => {}); }
-        const directory = await fs.open(root, 'r');
-        try { await directory.sync(); } finally { await directory.close(); }
-        emit('written');
-      }).catch(() => { emit('failed'); process.exitCode = 1; process.stdin.destroy(); }); });
-      lines.on('close', () => { void chain.then(() => {}); });
-    `
-    const environment = scrubbedParentEnv()
-    // The executable belongs to this Host. Only this private worker must enter Node mode under Electron.
-    if (process.versions.electron) environment.ELECTRON_RUN_AS_NODE = '1'
-    const owner = spawn('flock', ['--exclusive', '--timeout', '10', this.lock, process.execPath, '-e', script, this.file, this.root],
-      { env: environment, stdio: ['pipe', 'pipe', 'pipe'] })
-    owner.stderr.resume()
-    let acknowledge: { resolve(): void; reject(error: Error): void } | undefined
-    owner.stdin.on('error', () => { acknowledge?.reject(new Error('connection_store_locked')); acknowledge = undefined })
-    let acquired!: () => void
-    const locked = new Promise<void>((resolve) => { acquired = resolve })
-    createInterface({ input: owner.stdout }).on('line', (line) => {
-      if (line === 'locked') acquired()
-      else if (line === 'written') { acknowledge?.resolve(); acknowledge = undefined }
-      else { acknowledge?.reject(new Error('connection_store_locked')); acknowledge = undefined }
-    })
-    const exited = new Promise<void>((resolve, reject) => {
-      owner.once('error', () => { acknowledge?.reject(new Error('connection_store_locked')); reject(new Error('connection_store_locked')) })
-      owner.once('exit', (code) => {
-        acknowledge?.reject(new Error('connection_store_locked')); acknowledge = undefined
-        if (code === 0) resolve()
-        else reject(new Error('connection_store_locked'))
-      })
-    })
-    void exited.catch(() => {})
+    let entered = false
     try {
-      await Promise.race([locked, exited.then(() => { throw new Error('connection_store_locked') })])
-      const write = (row: Row) => new Promise<void>((resolve, reject) => {
-        if (owner.exitCode !== null || owner.killed || owner.stdin.destroyed) { reject(new Error('connection_store_locked')); return }
-        acknowledge = { resolve, reject }
-        owner.stdin.write(JSON.stringify(JSON.stringify(row)) + '\n', (error) => { if (error) { acknowledge?.reject(new Error('connection_store_locked')); acknowledge = undefined } })
-      })
-      const result = await run(write)
-      if (owner.exitCode !== null) throw new Error('connection_store_locked')
-      return result
-    } finally { owner.stdin.end(); await exited }
+      // The current Host owns the lock and the write; no detached writer can outlive it.
+      return await withFileLock(this.file, async () => {
+        entered = true
+        return run(async (row) => {
+          try { await writeFileAtomic(this.file, JSON.stringify(row), { mode: 0o600, dirMode: 0o700 }) }
+          catch { throw new Error('credential_store_unavailable') }
+        })
+      }, { waitMs: 10000 })
+    } catch (error) {
+      if (!entered) throw new Error('connection_store_locked')
+      throw error
+    }
   }
 }

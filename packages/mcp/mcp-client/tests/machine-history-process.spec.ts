@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
 import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 
-it.skipIf(process.platform !== 'linux')('restores still-valid historical bearer protection after the first Host process exits', async () => {
+it('restores still-valid historical bearer protection after the first Host process exits', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mcp-history-process-'))
   const harness = fileURLToPath(new URL('../../../../', import.meta.url))
   try {

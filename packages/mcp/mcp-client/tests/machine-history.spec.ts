@@ -18,7 +18,7 @@ async function fixture(id = 'history') {
   return { root, store, generation, file, token }
 }
 
-it.skipIf(process.platform !== 'linux')('preserves encrypted known material across replacement, clear, disable and explicit enable', async () => {
+it('preserves encrypted known material across replacement, clear, disable and explicit enable', async () => {
   const f = await fixture()
   const a = f.token('private-bearer-alpha', 'issue-a'); const b = f.token('private-bearer-beta', 'issue-b')
   await f.store.commit(f.generation, a)
@@ -37,7 +37,7 @@ it.skipIf(process.platform !== 'linux')('preserves encrypted known material acro
   expect((await reloaded.sentHistory()).length).toBe(2)
 })
 
-it.skipIf(process.platform !== 'linux')('does not reuse a Token ciphertext as history or copy history to another connection', async () => {
+it('does not reuse a Token ciphertext as history or copy history to another connection', async () => {
   const f = await fixture()
   const token = f.token('private-purpose-bearer', 'purpose')
   await f.store.commit(f.generation, token)
@@ -54,7 +54,7 @@ it.skipIf(process.platform !== 'linux')('does not reuse a Token ciphertext as hi
   await expect(other.sentHistory()).rejects.toThrow('credential_store_unavailable')
 })
 
-it.skipIf(process.platform !== 'linux')('CAS cleanup preserves a newer receipt and does not reset the connection fence or retry deadline', async () => {
+it('CAS cleanup preserves a newer receipt and does not reset the connection fence or retry deadline', async () => {
   const f = await fixture()
   const old = f.token('same-private-bearer', 'old-issue')
   await f.store.commit(f.generation, old)
@@ -73,7 +73,7 @@ it.skipIf(process.platform !== 'linux')('CAS cleanup preserves a newer receipt a
   expect(await f.store.token(f.generation, 'partition')).toBeUndefined()
 })
 
-it.skipIf(process.platform !== 'linux')('migrates schema1 without altering ciphertext or claiming complete history, and recovery cannot enable it', async () => {
+it('migrates schema1 without altering ciphertext or claiming complete history, and recovery cannot enable it', async () => {
   const f = await fixture()
   await f.store.commit(f.generation, f.token('legacy-private-bearer', 'legacy'))
   const original = JSON.parse(await readFile(f.file, 'utf8'))
@@ -93,7 +93,7 @@ it.skipIf(process.platform !== 'linux')('migrates schema1 without altering ciphe
   expect(await f.store.sentHistory()).toEqual([])
 })
 
-it.skipIf(process.platform !== 'linux')('does not erase old encrypted data or mint a replacement key when the credential source is unavailable', async () => {
+it('does not erase old encrypted data or mint a replacement key when the credential source is unavailable', async () => {
   const f = await fixture()
   await f.store.commit(f.generation, f.token('unavailable-key-bearer', 'missing'))
   const original = JSON.parse(await readFile(f.file, 'utf8'))
@@ -138,7 +138,7 @@ it('does not restart an unchanged receipt lifetime on every history reload', () 
   expect(redactor.sanitize(record.value).includes(record.value)).toBe(false)
 })
 
-it.skipIf(process.platform !== 'linux')('refuses an unsupported future state format without replacing it', async () => {
+it('refuses an unsupported future state format without replacing it', async () => {
   const f = await fixture()
   const row = JSON.parse(await readFile(f.file, 'utf8')); row.schema = 3
   const raw = JSON.stringify(row); await writeFile(f.file, raw, { mode: 0o600 })
@@ -146,7 +146,7 @@ it.skipIf(process.platform !== 'linux')('refuses an unsupported future state for
   expect((await readFile(f.file, 'utf8')) === raw).toBe(true)
 })
 
-it.skipIf(process.platform !== 'linux')('does not silently evict a live receipt when durable history reaches its count budget', async () => {
+it('does not silently evict a live receipt when durable history reaches its count budget', async () => {
   const { createCipheriv, createHash, randomBytes } = await import('node:crypto')
   const f = await fixture()
   const row = JSON.parse(await readFile(f.file, 'utf8'))
@@ -168,7 +168,7 @@ it.skipIf(process.platform !== 'linux')('does not silently evict a live receipt 
   expect((await f.store.state())!.active).toBe(true)
 })
 
-it.skipIf(process.platform !== 'linux')('authenticates fresh empty completeness and rejects missing or truncated envelopes', async () => {
+it('authenticates fresh empty completeness and rejects missing or truncated envelopes', async () => {
   const f = await fixture()
   const original = JSON.parse(await readFile(f.file, 'utf8'))
   expect(Boolean(original.history?.ciphertext)).toBe(true)
@@ -184,7 +184,7 @@ it.skipIf(process.platform !== 'linux')('authenticates fresh empty completeness 
   }
 })
 
-it.skipIf(process.platform !== 'linux')('cannot remove plaintext migration metadata to bypass the authenticated operator gate', async () => {
+it('cannot remove plaintext migration metadata to bypass the authenticated operator gate', async () => {
   const f = await fixture()
   const fresh = JSON.parse(await readFile(f.file, 'utf8'))
   await f.store.commit(f.generation, f.token('legacy-secret-unchanged', 'legacy'))

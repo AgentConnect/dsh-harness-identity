@@ -73,7 +73,7 @@ describe('public machine discovery', () => {
   })
 })
 
-describe.skipIf(process.platform !== 'linux')('machine tokens and transport', () => {
+describe('machine tokens and transport', () => {
   it('single-flights complete partitions, sends only CC fields, encrypts tokens and reauthenticates after restart', async () => {
     const f = await fixture()
     try {

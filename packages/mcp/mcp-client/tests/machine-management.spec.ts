@@ -143,7 +143,7 @@ async function boot(allowed = true) {
     machine: [...ctx.loader.entries()].find(value => value.options.id === 'machine')!, manager: [...ctx.loader.entries()].find(value => value.options.id === 'manager')! }
 }
 
-it.skipIf(process.platform !== 'linux').each([true, false])('revalidates expired discovery before a tool call while retaining permission checks (%s)', async (permitted) => {
+it.each([true, false])('revalidates expired discovery before a tool call while retaining permission checks (%s)', async (permitted) => {
   const b = await boot()
   const execute = () => executeToolFixture(b.ctx, { name: 'mcp__managed__identity_get', arguments: {}, callId: ToolCallId('expired-target'), signal: new AbortController().signal })
   expect((await execute()).isError).toBe(false)
@@ -160,7 +160,7 @@ it.skipIf(process.platform !== 'linux').each([true, false])('revalidates expired
   } finally { clock.mockRestore() }
 })
 
-it.skipIf(process.platform !== 'linux')('withholds a result when discovery expires during the tool operation without replay', async () => {
+it('withholds a result when discovery expires during the tool operation without replay', async () => {
   const b = await boot()
   let release!: () => void
   let entered = false
@@ -185,7 +185,7 @@ it.skipIf(process.platform !== 'linux')('withholds a result when discovery expir
   }
 })
 
-it.skipIf(process.platform !== 'linux')('uses protected user Remote to stop SDK/tools, retains disabled across Loader restart, and explicitly reauthorizes enablement', async () => {
+it('uses protected user Remote to stop SDK/tools, retains disabled across Loader restart, and explicitly reauthorizes enablement', async () => {
   const b = await boot()
   expect(await b.call('status', false)).toEqual({ status: 401 })
   expect(await b.call('status')).toMatchObject({ ok: true, value: { state: 'ready', authentication: 'token_ready' } })
@@ -217,11 +217,11 @@ it.skipIf(process.platform !== 'linux')('uses protected user Remote to stop SDK/
   for (const secret of ['private-token', 'assertion', 'MCP_KEY', 'https://', 'policyRef', 'identityRef']) expect(result).not.toContain(secret)
 })
 
-it.skipIf(process.platform !== 'linux')('refuses an unapproved manager even when loaded by the real Loader', async () => {
+it('refuses an unapproved manager even when loaded by the real Loader', async () => {
   await expect(boot(false)).rejects.toThrow('manager_forbidden')
 })
 
-it.skipIf(process.platform !== 'linux')('rechecks the manager after a signer await and preserves the disabled fence', async () => {
+it('rechecks the manager after a signer await and preserves the disabled fence', async () => {
   const b = await boot(); await b.call('disconnect')
   const disabled = await b.store.state()
   let entered!: () => void; let release!: () => void
@@ -238,7 +238,7 @@ it.skipIf(process.platform !== 'linux')('rechecks the manager after a signer awa
   expect(b.ctx.tools.get('mcp__managed__identity_get')).toBeUndefined()
 })
 
-it.skipIf(process.platform !== 'linux')('CAS enablement cannot overwrite a newer disabled fence or admit an old writer', async () => {
+it('CAS enablement cannot overwrite a newer disabled fence or admit an old writer', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mcp-enable-cas-')); roots.push(root)
   const store = new MachineConnectionStore(root, 'cas', async () => Buffer.alloc(32, 9))
   const old = await store.open('old'); await store.disable()
@@ -292,7 +292,7 @@ it('loads omitted and explicit none HTTP authentication through the actual Loade
   expect(businessRequests).toBe(before)
 })
 
-it.skipIf(process.platform !== 'linux')('rolls back its own activation when management is revoked while the Token response is pending', async () => {
+it('rolls back its own activation when management is revoked while the Token response is pending', async () => {
   const b = await boot(); await b.call('disconnect')
   let entered!: () => void; let release!: () => void
   const waiting = new Promise<void>((resolve) => { entered = resolve })
@@ -306,7 +306,7 @@ it.skipIf(process.platform !== 'linux')('rolls back its own activation when mana
   expect(b.ctx.tools.get('mcp__managed__identity_get')).toBeUndefined()
 })
 
-it.skipIf(process.platform !== 'linux')('disconnects during an enable flight without reviving its token or tools', async () => {
+it('disconnects during an enable flight without reviving its token or tools', async () => {
   const b = await boot(); await b.call('disconnect')
   let entered!: () => void; let release!: () => void
   const waiting = new Promise<void>((resolve) => { entered = resolve })
@@ -322,7 +322,7 @@ it.skipIf(process.platform !== 'linux')('disconnects during an enable flight wit
   expect(b.ctx.tools.get('mcp__managed__identity_get')).toBeUndefined()
 })
 
-it.skipIf(process.platform !== 'linux')('does not let failed enable rollback disable another process activation with the same generation', async () => {
+it('does not let failed enable rollback disable another process activation with the same generation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mcp-enable-owner-')); roots.push(root)
   const store = new MachineConnectionStore(root, 'owner', async () => Buffer.alloc(32, 9))
   await store.open('old'); await store.disable(); const disabled = (await store.state())!.generation
@@ -335,7 +335,7 @@ it.skipIf(process.platform !== 'linux')('does not let failed enable rollback dis
   expect(await store.state()).toEqual({ generation: winner + 1, active: false })
 })
 
-it.skipIf(process.platform !== 'linux')('reports blocked and unconfirmed when durable disconnect fails while still closing SDK and tools', async () => {
+it('reports blocked and unconfirmed when durable disconnect fails while still closing SDK and tools', async () => {
   const b = await boot()
   const failing = vi.spyOn(MachineConnectionStore.prototype, 'disable').mockRejectedValueOnce(new Error('private-provider-error'))
   try {
@@ -347,7 +347,7 @@ it.skipIf(process.platform !== 'linux')('reports blocked and unconfirmed when du
   } finally { failing.mockRestore() }
 })
 
-it.skipIf(process.platform !== 'linux')('protects actual Loader SDK tool schemas, arbitrary result keys/values and historical bearer echoes', async () => {
+it('protects actual Loader SDK tool schemas, arbitrary result keys/values and historical bearer echoes', async () => {
   f.echo = true
   const b = await boot()
   const execute = () => executeToolFixture(b.ctx, { name: 'mcp__managed__identity_get', arguments: {}, callId: ToolCallId('echo'), signal: new AbortController().signal })
@@ -371,7 +371,7 @@ it.skipIf(process.platform !== 'linux')('protects actual Loader SDK tool schemas
   }
 })
 
-it.skipIf(process.platform !== 'linux')('contains SDK initialize error echoes in both startup causes and Host logs', async () => {
+it('contains SDK initialize error echoes in both startup causes and Host logs', async () => {
   f.failInit = true
   let failure: unknown
   try { await boot() } catch (error) { failure = error }
@@ -382,7 +382,7 @@ it.skipIf(process.platform !== 'linux')('contains SDK initialize error echoes in
   expect(f.history.length).toBeGreaterThan(0)
 })
 
-it.skipIf(process.platform !== 'linux')('rejects a late SDK result after current C permission is revoked', async () => {
+it('rejects a late SDK result after current C permission is revoked', async () => {
   f.echo = true
   const b = await boot()
   let entered!: () => void; let release!: () => void
@@ -397,7 +397,7 @@ it.skipIf(process.platform !== 'linux')('rejects a late SDK result after current
   for (const token of f.history) expect(JSON.stringify(received).includes(token)).toBe(false)
 })
 
-it.skipIf(process.platform !== 'linux')('rejects a late SDK result after explicit connection disablement', async () => {
+it('rejects a late SDK result after explicit connection disablement', async () => {
   f.echo = true
   const b = await boot()
   let entered!: () => void; let release!: () => void
@@ -414,7 +414,7 @@ it.skipIf(process.platform !== 'linux')('rejects a late SDK result after explici
   for (const token of f.history) expect(JSON.stringify(await result).includes(token)).toBe(false)
 })
 
-it.skipIf(process.platform !== 'linux')('keeps an echoed bearer out of model-facing tool names without changing the raw SDK name', async () => {
+it('keeps an echoed bearer out of model-facing tool names without changing the raw SDK name', async () => {
   f.echo = true; f.echoName = true
   const b = await boot()
   const schema = b.ctx.tools.schemas().find(tool => tool.name.startsWith('mcp__managed__'))!
@@ -424,7 +424,7 @@ it.skipIf(process.platform !== 'linux')('keeps an echoed bearer out of model-fac
   for (const token of f.history) expect(JSON.stringify(received).includes(token)).toBe(false)
 })
 
-it.skipIf(process.platform !== 'linux')('keeps a legacy connection visible but blocks SDK/tools and ignores user-submitted recovery claims', async () => {
+it('keeps a legacy connection visible but blocks SDK/tools and ignores user-submitted recovery claims', async () => {
   const b = await boot()
   await b.machine.update({ disabled: true })
   const { readdir, readFile } = await import('node:fs/promises')
@@ -444,7 +444,7 @@ it.skipIf(process.platform !== 'linux')('keeps a legacy connection visible but b
   expect(f.tokens).toBe(before)
 })
 
-it.skipIf(process.platform !== 'linux')('protects actual signed client assertions echoed by the AS/RS after the machine plugin is reconstructed', async () => {
+it('protects actual signed client assertions echoed by the AS/RS after the machine plugin is reconstructed', async () => {
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
   f.echoProof = true
   f.proofSigner = () => {
@@ -473,7 +473,7 @@ it.skipIf(process.platform !== 'linux')('protects actual signed client assertion
   for (const proof of f.assertions) expect(JSON.stringify(b.ctx.logger.buffer).includes(proof)).toBe(false)
 })
 
-it.skipIf(process.platform !== 'linux')('returns no late SDK business value after another Store disables during the final lease await', async () => {
+it('returns no late SDK business value after another Store disables during the final lease await', async () => {
   const b = await boot()
   const original = MachineConnectionStore.prototype.sentHistory
   let armed = false; let held = false; let entered!: () => void; let release!: () => void
@@ -495,7 +495,7 @@ it.skipIf(process.platform !== 'linux')('returns no late SDK business value afte
 })
 
 for (const stage of ['initialize', 'tools/list'] as const) {
-  it.skipIf(process.platform !== 'linux')(`reloads cross-process bearer history before ${stage} SDK error logging`, async () => {
+  it(`reloads cross-process bearer history before ${stage} SDK error logging`, async () => {
     const original = MachineConnectionStore.prototype.open
     let owner: { root: string; partition: string; generation: number } | undefined
     const opening = vi.spyOn(MachineConnectionStore.prototype, 'open').mockImplementation(async function (this: MachineConnectionStore, partition) {
