@@ -106,7 +106,7 @@
     "@deepseek-ai/dsh-working-directory": "workspace:*",
     "@testing-library/react": "^16.3.3",
     "clsx": "^2.1.1",
-    "react": "^18.2.0",
+    "react": "^19.3.0",
     "react-dom": "^18.2.0",
     "@deepseek-ai/dsh-timeout": "workspace:*",
     "@deepseek-ai/dsh-session-projection-cache": "workspace:*",
