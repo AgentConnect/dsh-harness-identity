@@ -13,6 +13,10 @@
  * @module @deepseek-ai/dsh-mcp-client
  */
 
+import { isAbsolute } from 'node:path'
+import { ManagedConnection } from './managed-connection.ts'
+import { machineUrl } from './machine-http.ts'
+import type { MachineAuthentication, NoMachineAuthentication } from './machine-types.ts'
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { scopeOf } from '@deepseek-ai/dsh-scope'
@@ -114,6 +118,8 @@ export interface StreamableHttpConfig {
    * unique among live mcp-client instances in the same registration scope.
    */
   serverName: string
+  /** Local identity authentication for this exact machine resource. */
+  authentication?: NoMachineAuthentication | MachineAuthentication
   /** MCP endpoint URL. */
   url: string
   /** Additional headers attached to MCP requests. */
@@ -178,6 +184,18 @@ export const Config = z.union([
     transport: z.const('streamable-http'),
     serverName: z.string().required().pattern(SERVER_NAME_PATTERN),
     url: z.string().required(),
+    authentication: z.union([z.object({ mode: z.const('none').required() }), z.object({
+      mode: z.const('cimd-client-credentials'), connectionId: z.string().required(),
+      identityRef: z.object({ storeId: z.string().required(), identityId: z.string().required(), did: z.string().required() }),
+      policyRef: z.string().required(), requestedScopes: z.array(String).required(), issuer: z.string(),
+      stateRoot: z.string().required(), encryptionKeyRef: z.string().required(),
+      discoveryCacheMs: z.number().min(1000).max(3600000).default(300000),
+      tokenRetry: z.object({
+        maxAttempts: z.number().min(1).max(5).step(1).default(3),
+        initialDelayMs: z.number().min(1).max(30000).default(250),
+        maxDelayMs: z.number().min(1).max(30000).default(5000),
+      }),
+    })]),
     headers: z.dict(String).default({}),
     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
     startupTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
@@ -201,6 +219,7 @@ export const Config = z.union([
  * @returns startup readiness after connection and initial tool discovery settle.
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
+  if (config.transport === 'streamable-http' && config.authentication === null) throw new Error('invalid_machine_authentication')
   // Fail loud at load: reconnect misconfiguration (including programmatic
   // construction that bypassed Schemastery) rejects THIS instance before any
   // effect registers.
@@ -224,7 +243,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     names.add(config.serverName)
     status = registerStatusCell(ctx.fiber, (message, error) => {
       ctx.logger.warn(`mcp-client(${config.serverName}): ${message}`)
-      if (!config.expandTemplates) ctx.logger.warn(error)
+      if (config.transport === 'streamable-http' && config.authentication?.mode === 'cimd-client-credentials') ctx.logger.warn('machine_connection_observer_failed')
+      else if (!config.expandTemplates) ctx.logger.warn(error)
     })
     return () => {
       if (ctx.fiber.uid === null) status.detach()
@@ -238,6 +258,28 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   if (!status.closure().closeConfirmed || status.closure().cleanupError !== undefined) {
     throw new Error(`mcp-client(${config.serverName}): previous connection cleanup is incomplete; restart the Host`)
   }
+  if (config.transport === 'streamable-http' && config.authentication && config.authentication.mode !== 'none') {
+    const auth = config.authentication
+    machineUrl(config.url)
+    if (config.expandTemplates || !isAbsolute(auth.stateRoot) || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(auth.encryptionKeyRef)
+      || auth.mode !== 'cimd-client-credentials' || !auth.requestedScopes.length
+      || auth.requestedScopes.some(scope => !/^[\x21\x23-\x5b\x5d-\x7e]{1,128}$/u.test(scope))
+      || Object.keys(config.headers).some(key => /^(host|authorization|proxy-authorization|cookie|poppy-session|dpop)$/iu.test(key))) {
+      throw new Error('invalid_machine_authentication')
+    }
+    const connection = new ManagedConnection(ctx, { ...config, authentication: auth }, reconnect, status)
+    const unregister = ctx.get('mcpConnections')?.register(ctx, auth.connectionId, connection)
+    ctx.effect(() => async () => {
+      try { await connection.dispose() } finally { unregister?.() }
+    }, 'mcp-client.machine-authentication')
+    registerServerContext(ctx, config.serverName, connection)
+    const outcome = await connection.start()
+    if (outcome.error !== undefined && config.failOnStartupError) {
+      throw new Error(`mcp-client(${config.serverName}): initial connection or tool synchronization failed`, { cause: outcome.error })
+    }
+    return
+  }
+
   const connection = startConnection(ctx, config, reconnect, status)
   let stopping: Promise<void> | undefined
   const dispose = (): Promise<void> => stopping ??= connection.dispose()

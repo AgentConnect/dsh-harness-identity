@@ -250,3 +250,65 @@ SDK 通过旧版通知或现代协议订阅接收工具列表变化。监督器�
 - 固定的 MCP SDK 仍在演化；上游破坏性变更需要更新桥接。
 
 </details>
+
+<a id="cimd-machine-authentication"></a>
+### CIMD 机器认证
+
+省略认证和显式 `authentication.mode: none` 保留既有 HTTP Header 路径。Streamable HTTP 可显式选择 `authentication.mode: cimd-client-credentials`，提供已发布的 `identityRef`、已批准的 `policyRef`、非空最小 `requestedScopes`、绝对保护目录 `stateRoot`，以及引用 Host 凭据中 32 字节 base64url 加密 key 的 `encryptionKeyRef`。可选精确 `issuer` 在资源列出多个 AS 时固定唯一选择。公共本地身份服务核对已安装 consumer Context 与政策，只授予目标绑定 signer lease，身份私钥保留本机。
+
+`connectionId` 是持久的全 Host 逻辑连接标识，与 `serverName` 不同。不同 Agent 可使用不同 connectionId 复用服务器名称。版本化进程 registry 在发现或签名前拒绝任何 scope、app root、state目录或 package 副本中的重复 id。这一保守 Host 契约持续到 quiescent disposal，包含初始化失败；opaque owner token 防止旧 disposer 删除新 owner。重载同一逻辑连接沿用原配置 id，进程重启仍读取原持久禁用 fence。多个进程共享同一保护目录和 id 表示同一个逻辑连接及代次，不表示各自独立的 Agent 连接。
+
+公开发现不带凭据读取资源和 AS 元数据，固定唯一精确 resource/issuer，并要求明确 CIMD、client_credentials、private_key_jwt 和 ES256 支持。唯一 Token 交换使用本地新断言和精确 issuer audience；没有浏览器、授权码、DCR、匿名认证或 refresh 回退。此模式拒绝受管 Host、Authorization、Proxy-Authorization、Cookie、DPoP、Poppy-Session Header。
+
+机器 HTTPS 使用既有 Host `proxyRouteFor` 权威政策。当前 profile 只实现验证后 DNS pin 的 direct 连接；active proxy route 在身份准入或签名前报 proxy_egress_unsupported，不会暗中直连。NO_PROXY 目标仍执行 direct 地址/TLS 检查。既有 stdio 和非机器 HTTP 代理路径保持原行为。每次 direct 请求固定已验证公网 DNS 到新 TLS socket，限制 DNS/upload/response 等待和大小，拒绝凭据重定向，并校验精确 JSON MIME、重复成员、UTF-8、BOM。
+
+Token 是有界寿命且满足请求 scope 的 opaque Bearer。完整 connection/identity/publication/issuer/resource/discovery/scope/policy 分区隔离加密存储与 single-flight。每个 Token 任务固定不可变 binding，提交和物理发送重新检查代次与本地许可。Linux 内核锁串行持久变更，由持锁 worker 自己写入、fsync、rename 密文；holder 死亡不能让旧父操作复活禁用 fence，stdin 失败也被包含。断开在第一个 await 前停止 admission，持久禁用、取消并 drain 任务，独立报告可信撤销端点结果 confirmed 或 remote_revocation_unconfirmed。资源 401 使当前操作失败而不重放，下一明确操作才可重取。
+
+在 discovery 到期后开始的新操作，会在第一个工具 guard 前重新获取并校验公开元数据与当前 signer lease。结果投影保留现有代次、到期和许可检查；进行中的操作若遇到到期则拒绝输出，不重放业务调用。
+
+Host 专用 `MachineAuthenticationSession` 提供自身连接的脱敏 status() 和 dispose(true)。认证不向模型添加文本或凭据；工具 schema、scope、附件和结果呈现继续沿用下文机制。SDK 沿用官方当前固定的 @modelcontextprotocol/client@2.2.0；传输、版本协商和工具投影接入新版上游实现。
+
+显式启用的 `management` 与 `management-remote` 入口向 Host 受保护用户客户端提供状态、断开和明确重新启用。它们与既有 Typert Gateway 一起组合；管理 allowlist 默认拒绝所有调用者：
+
+```yaml
+- name: '@deepseek-ai/dsh-mcp-client/management'
+  config:
+    managerConsumers: ['@deepseek-ai/dsh-mcp-client/management-remote']
+- name: '@deepseek-ai/dsh-mcp-client/management-remote'
+```
+
+机器 row 可声明 `inject: [mcpConnections, anpIdentity, credentials]`，使 Loader 在激活前提供三项服务。受保护用户端点为 `mcpConnections/status`、`mcpConnections/disconnect` 和 `mcpConnections/enable`，均只接受 `{ connectionId }`。状态区分身份 binding、可用 Token 与实际 SDK/工具就绪，不返回 URL 或凭据。管理服务每次操作验证已安装 Remote Context；C 另行验证实际 MCP consumer 与当前政策。
+
+明确断开持久化禁用代次、取消在途工作、关闭 SDK 并移除工具。重载和进程退出保留持久状态。已禁用 row 重载后仍可查询，不联系资源或取得 signer lease。明确重新启用重复公开发现、当前 C 授权和 SDK/工具连接；失败保留禁用 fence。操作归属防止旧启用失败禁用并发后继。重启无法恢复此前远端撤销证明，按未确认报告。这些 Host 入口不提供专用设置卡或 ACP 身份绑定。
+
+机器插件在工具名、描述、schema、结果字符串与 JSON key、错误文本和连接日志中隐藏已知 Bearer 及实际签出的 client assertion。窄范围守卫还识别 C 已确认 client_id 的固定 ES256 客户端认证断言，包括重建后的过期完整断言；其他身份、claim 集合或 token type 的业务 JWT 保留数据。SDK wire 保持原样，异步投影后复核当前 SDK 代次、连接 fence 与 C lease。
+
+Bearer 记录、完整性与迁移资格共用强制认证 envelope，fresh 空 history 也需认证。AES-GCM AAD 绑定 purpose、connection 和当前 Token frame；明文提示字段不决定 history 资格。Bearer 发出前必须完成 history 持久化，输出处理重新读取 history；Token 替换、clear、disable 和 enable 保留已知材料。重启以新的单调时钟，为每个加载的 receipt 保守重新计算完整广告寿命加 30 秒。SDK 在途操作固定保留窗口；到期 receipt 按版本 CAS 清理，保留并发后继、禁用 fence 和重试限制。内存最多保留 256 项、1 MiB；持久 history 最多 256 条，加密前序列化明文上限 1 MiB。满额停止新发送，不丢弃仍可能有效的值。
+
+Schema 2 保留旧版启用状态、generation 和 ciphertext，并把未知历史标为不完整。连接仍公开 historyState 与 migrationId，但 SDK/工具保持停止。解密 key 缺失不会生成新 master 或擦旧 ciphertext；换 connectionId/stateRoot 或只撤销最新 Token 不证明完整历史。Host management 的 legacyRecovery 数组默认空，仅受信运维配置可提供精确 connectionId/migrationId、封闭 kind 和 evidenceRef；Remote 仍只收 connectionId。prior-bearers-invalidated 表示运维证明所有早前 Token 已失效，不是 SDK 验证。old-writers-stopped 还要求该事实之后完整 86431 秒单调隔离，再明确 enable；重建 Host 保守重算隔离。恢复不会隐式启用已禁用连接。
+
+在 Electron 中，内部 Linux 持锁 worker 仅在当前 Host 的 `process.versions.electron` 确认运行环境后显式进入 RunAsNode。它不依赖继承的环境标志，也不改变其他子进程的启动模式。Store 仍需系统提供 `flock` 可执行程序。
+
+### 工具命名与共存
+
+模型看到每个工具都带有稳定的服务器限定名称：`mcp__<serverName>__<rawName>`，例如 `mcp__github__create_issue`——与 Claude Code 和 Codex 使用的命名形态相同。只要服务器保持相同的工具名称，名称就保持不变，因此会话历史与权限规则在重启和重载后仍然有效。两个服务器可以同时提供名为 `search` 的工具，分别以 `mcp__github__search` 和 `mcp__web__search` 共存。
+
+- 发布相同工具名称（例如 `search`）的两个服务器会在各自的 namespace 下共存。
+- 两条配置项使用相同的服务器名称时，后加载的一条会在加载时以明确错误失败。
+- 服务器在工具列表中两次列出同一工具时，其工具列表会被作为无效列表拒绝，上一组工具保持可用。
+- `tools/list` 返回重复的非空续传游标时会立即拒绝本次更新，包括经过空页的循环；上一组工具保持可用，后续更新仍可成功。
+- 工具更新与已有工具名称冲突时，该更新会被整体拒绝——绝不会得到该服务器的部分工具集。
+
+### 调用工具与读取结果
+
+模型调用 MCP 工具时，调用会以每次调用超时（默认 60 秒）发往远程服务器，并像其他工具调用一样可以取消。结果按块顺序以普通文本返回；资源链接以文本形式显示名称与 URI。如果服务器报告错误，调用会明确失败——模型不会看到虚假的成功。
+
+当前模型接受图片输入且 harness 启用了附件功能时支持图片；图片会像其他图片一样出现在对话中。不支持图片时——以及服务器返回音频或嵌入资源时——模型会看到清晰的诊断消息，而不是什么都没有。
+
+### 启动、工具更新与重连
+
+服务器的工具会在 harness 开始首个轮次之前出现。服务器更改工具列表时，模型的工具集会自动更新；更新失败时，上一组工具继续可用。
+
+服务器连接断开时——例如本地服务器进程崩溃——插件会以从 500 ms 起逐次翻倍、上限 30 s 的延迟自动重连，并刷新工具集；重连进度在日志中可见。中断期间最后已知的工具仍会列出，但对它们的调用会失败，直到服务器恢复。连续失败十次后，该服务器的工具会被移除，重连停止，直到你重载配置或重启 harness；服务器持续连接一段时间后，该计数会重置。设置 `reconnect.enabled: false` 可禁用自动重连——此时工具在断开后仍会列出，但调用失败，直到你重载。编辑配置项会在原地重载服务器连接，未变的名称保持不变。
+
+-----

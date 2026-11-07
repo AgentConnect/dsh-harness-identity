@@ -250,3 +250,65 @@ This Dev Note is working context for maintainers: open design questions and dire
 - The pinned MCP SDK is still evolving; a breaking upstream change requires updating the bridge.
 
 </details>
+
+<a id="cimd-machine-authentication"></a>
+### CIMD machine authentication
+
+Omitted authentication and explicit `authentication.mode: none` retain the existing HTTP headers path. Streamable HTTP can explicitly select `authentication.mode: cimd-client-credentials`. Provide a published `identityRef`, approved `policyRef`, nonempty minimum `requestedScopes`, absolute protected `stateRoot`, and `encryptionKeyRef` naming a Host credential with a 32-byte base64url encryption key. An optional exact `issuer` selects one AS when resource metadata lists several. The shared local identity service binds the installed consumer Context to its policy and supplies only a target-bound signer lease; private identity keys remain local.
+
+`connectionId` is a persistent Host-wide logical connection identifier, distinct from `serverName`. Different Agents may reuse a server name with different connection ids. A versioned process registry rejects the same connection id in any scope, app root, state directory or loaded package copy before discovery or signing. This conservative Host contract retains ownership until quiescent disposal, including failed initialization. An opaque owner token prevents an old disposer from releasing the next owner. Reloading the same logical connection reuses its configured id; a restarted process still reads the original persistent disabled fence. Multiple processes sharing one protected directory and id operate the same logical connection and its generation, not independent Agent connections.
+
+Discovery reads public protected-resource and AS metadata without credentials, fixes one exact resource and issuer, and requires explicit CIMD, client_credentials, private_key_jwt and ES256 support. The only Token exchange uses a fresh local assertion with the exact issuer audience. There is no browser, authorization-code, DCR, anonymous-authentication or refresh fallback. Managed Host, Authorization, Proxy-Authorization, Cookie, DPoP and Poppy-Session headers are rejected in this mode.
+
+Machine HTTPS uses the existing Host `proxyRouteFor` authority. This profile implements validated, DNS-pinned direct connections only: an active proxy route fails with `proxy_egress_unsupported` before identity admission or signing; it never silently connects directly. A NO_PROXY destination still passes the direct address/TLS checks. Existing stdio and non-machine HTTP proxy behavior retains its original path. Each direct request pins a public DNS answer to a new verified TLS socket, bounds DNS/upload/response waits and sizes, rejects credential redirects, and validates exact JSON MIME, duplicate names, UTF-8 and BOM.
+
+Tokens remain opaque Bearer values with bounded expiry and sufficient requested scopes. The complete connection/identity/publication/issuer/resource/discovery/scope/policy partition isolates encrypted storage and single-flight acquisition. Each Token task captures one immutable binding, and commit and physical send recheck its generation and local permission. Linux kernel locking serializes updates; the lock-owning worker writes, fsyncs and renames encrypted data itself. Killing that worker cannot let an old parent revive a disabled fence, and broken stdin is contained. Disconnect stops admission before the first await, persists the disabled fence, aborts and drains tasks, and independently reports trusted-endpoint revocation as confirmed or remote_revocation_unconfirmed. A resource 401 fails the current operation without replay; only the next explicit operation may acquire a new Token.
+
+An operation starting after discovery expiry re-fetches and validates public metadata and the current signer lease before its first tool guard. Result projection retains the existing generation, expiry and permission checks; expiry during an in-flight operation fails closed without replaying the business call.
+
+The Host-only `MachineAuthenticationSession` export offers sanitized `status()` and `dispose(true)` for its own connection. Authentication adds no model text or credentials; tool schemas, scoped registration, attachments and result rendering use the existing paths below. The SDK follows upstream `@modelcontextprotocol/client@2.2.0`; transport, negotiation and tool projection use the current upstream implementation.
+
+The opt-in `management` and `management-remote` entries expose connection status, disconnect and explicit enablement to the Host’s authenticated user client. Compose them beside the existing Typert Gateway; the management allowlist denies every manager by default:
+
+```yaml
+- name: '@deepseek-ai/dsh-mcp-client/management'
+  config:
+    managerConsumers: ['@deepseek-ai/dsh-mcp-client/management-remote']
+- name: '@deepseek-ai/dsh-mcp-client/management-remote'
+```
+
+A machine row can require `inject: [mcpConnections, anpIdentity, credentials]` so the Loader makes all three providers available before activation. The protected user endpoints are `mcpConnections/status`, `mcpConnections/disconnect` and `mcpConnections/enable`, each accepting only `{ connectionId }`. Status separates identity binding, usable Token and actual SDK/tool readiness, and returns no URLs or credentials. The manager verifies the installed Remote Context on every operation; C separately verifies the installed MCP consumer and its current policy.
+
+Explicit disconnect persists a disabled generation, aborts pending work, closes the SDK and removes its tools. Reload and process unload retain the durable state. A disabled row remains queryable after reload without contacting the resource or taking a signer lease. Explicit enablement repeats public discovery, current C authorization and SDK/tool connection; a failed attempt keeps the disabled fence. Operation ownership prevents a failed old activation from disabling a concurrent successor. Restart cannot recover proof of a previous remote revocation and reports it as unconfirmed. A dedicated settings card and ACP identity binding are not provided by these Host entries.
+
+The machine plugin masks known bearer values and actual signed client assertions in tool names, descriptions, schemas, result strings and JSON keys, error text and connection logs. A narrow guard also recognizes the fixed ES256 client-auth assertion claims for a client_id confirmed by C, including expired complete assertions after reconstruction; business JWTs with other identities, claim sets or token types retain their data. The SDK wire remains unchanged, and asynchronous projection rechecks the current SDK generation, connection fence and C lease.
+
+Bearer records, completeness and migration qualifications share a mandatory authenticated envelope, including fresh empty history. Its AES-GCM AAD binds the purpose, connection and current Token frame; plaintext advisory fields cannot qualify history. Sending a bearer requires its history write to finish first; output processing reloads history. Token replacement, clear, disable and enable preserve known material. Restart conservatively starts each loaded receipt’s complete advertised lifetime plus 30 seconds on a fresh monotonic clock. In-flight SDK operations pin retention. Expired receipt versions are removed by CAS, preserving concurrent replacements, the disabled fence and retry limits. Memory retains at most 256 values and 1 MiB; persisted history retains at most 256 records and 1 MiB of serialized plaintext before encryption. Exhaustion stops new sending instead of dropping possibly valid values.
+
+Schema 2 retains legacy enablement, generation and ciphertext but marks unknown prior history incomplete. Such a connection remains visible with historyState and migrationId while SDK/tools stay stopped. Missing decryption keys do not create a replacement master or erase old ciphertext. Changing connectionId/stateRoot or revoking only the latest Token does not establish complete history. The Host management legacyRecovery array defaults to empty and accepts exact connectionId/migrationId, a closed kind and evidenceRef only from trusted operator configuration; Remote requests still contain only connectionId. prior-bearers-invalidated records an operator’s evidence covering all earlier Tokens, not an SDK verification. old-writers-stopped requires that evidence plus 86431 seconds of monotonic isolation before a later explicit enable; reconstructing the Host restarts that conservative interval. Recovery never implicitly enables a disabled connection.
+
+Under Electron, the internal Linux lock worker explicitly uses RunAsNode only when the current Host reports `process.versions.electron`. It does not depend on an inherited environment flag or change other child-process launch modes. The Store still requires the system `flock` executable.
+
+### Tool naming and coexistence
+
+The model sees each tool under a stable server-qualified name: `mcp__<serverName>__<rawName>`, for example `mcp__github__create_issue` — the same naming shape Claude Code and Codex use. Names stay stable while the server keeps the same tool name, so session history and permission rules survive restarts and reloads. Two servers can both offer a tool named `search` and coexist as `mcp__github__search` and `mcp__web__search`.
+
+- Two servers publishing the same tool name (for example `search`) coexist under their own namespaces.
+- Two entries using the same server name: the later one fails to load with a clear error.
+- A server that lists the same tool twice gets its tool list rejected as invalid, and the previous tool set stays active.
+- A repeated non-empty `tools/list` continuation cursor rejects that update immediately, including cycles through empty pages; the previous tool set stays active and later updates can still succeed.
+- An update that conflicts with an already-registered tool name is rejected entirely — you never get a partial tool set from that server.
+
+### Calling tools and reading results
+
+When the model calls an MCP tool, the call runs against the remote server with a per-call timeout (default 60 seconds) and can be cancelled like any other tool call. The result comes back as ordinary text in block order; resource links appear as text with their name and URI. If the server reports an error, the call fails visibly — the model does not see a fake success.
+
+Images are supported when the current model accepts image input and the harness attachment feature is enabled; they then appear in the conversation like other images. Otherwise — and for audio or embedded resources — the model sees a clear diagnostic message instead of nothing.
+
+### Startup, updates, and reconnection
+
+The server's tools appear before the harness starts its first turn. When the server changes its tool list, the model's tool set updates automatically; if the update fails, the previous tool set keeps working.
+
+When a server connection drops — for example a local server process crashes — the plugin reconnects automatically with delays that double from 500 ms up to 30 s and then refreshes the tool set; reconnect progress is visible in the logs. During an outage the last known tools stay listed but calls to them fail until the server recovers. After ten consecutive failed attempts the server's tools are removed and reconnection stops until you reload the configuration or restart the harness; a server that stays connected for a while resets that counter. Set `reconnect.enabled: false` to disable automatic reconnection — tools then stay listed but fail until you reload. Editing the configuration entry reloads the server connection in place, and unchanged names stay unchanged.
+
+-----

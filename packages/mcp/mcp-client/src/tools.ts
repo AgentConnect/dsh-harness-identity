@@ -1,3 +1,4 @@
+import { protectMachineFailure, type MachineOutputProtection } from './machine-output.ts'
 /**
  * Tool bridge: discovers MCP tools, registers them on the harness ToolRuntime
  * under deterministic server-qualified public names, and handles re-sync when
@@ -27,6 +28,7 @@ import { describeError, McpLocalError } from './diagnostic.ts'
 
 /** Resolved options relevant to tool bridging. */
 export interface ToolBridgeOptions {
+  protection?: MachineOutputProtection
   serverName: string
   toolCallTimeoutMs: number
   /** Generation cancellation combined with each tool execution's signal. */
@@ -132,9 +134,12 @@ export async function syncTools(
 ): Promise<ToolDisposers> {
   // Phase 1: fetch and build the next generation without touching the registry.
   const definitions = new Map<string, ToolDefinition>()
-  const response = client.getServerCapabilities()?.tools === undefined
+  await opts.protection?.assertActive()
+  const rawResponse = client.getServerCapabilities()?.tools === undefined
     ? { tools: [] }
     : await client.listTools(undefined, { cacheMode: 'refresh', signal: opts.signal })
+  await opts.protection?.assertActive()
+  const response = opts.protection ? opts.protection.sanitize(rawResponse) : rawResponse
   for (const tool of response.tools) {
     const publicName = publicToolName(opts.serverName, tool.name)
     if (definitions.has(publicName)) {
@@ -143,6 +148,7 @@ export async function syncTools(
       )
     }
     definitions.set(publicName, createMcpToolDefinition(ctx, {
+      ...(opts.protection ? { protection: opts.protection } : {}),
       name: publicName,
       rawName: tool.name,
       description: tool.description ?? '',
@@ -169,6 +175,7 @@ export async function syncTools(
   // Phase 2: swap generations — but only for a generation still entitled to
   // publish. The listing above is the slow await an abandonment can overtake;
   // state is published at its commit point or not at all.
+  await opts.protection?.assertActive()
   if (!eligible()) return previous
   for (const dispose of previous.values()) dispose()
   const disposers: ToolDisposers = new Map()
@@ -222,6 +229,8 @@ function supportedOutputSchema(candidate: unknown): JsonSchemaNode | undefined {
 export interface McpToolDefinitionOptions {
   /** ToolRuntime name presented to the model. */
   name: string
+  /** Host-only current identity and output guard for machine connections. */
+  protection?: MachineOutputProtection
   /** Upstream name used in result diagnostics. */
   rawName: string
   /** Upstream model-facing description. */
@@ -301,7 +310,7 @@ function createExecutor(
   projections: WeakMap<ToolExecution, PreparedProjection>,
 ): ToolDefinition['execute'] {
   const { rawName, taskRequired } = options
-  return async (args: unknown, exec: ToolExecution) => {
+  const execute = async (args: unknown, exec: ToolExecution) => {
     if (taskRequired) {
       throw new Error(`Tool "${rawName}" requires task-based execution, which this bridge does not support`)
     }
@@ -314,7 +323,7 @@ function createExecutor(
     if (parsed.issues !== undefined) {
       throw new Error(`Tool "${rawName}" returned an invalid MCP result: ${parsed.issues.map(issue => issue.message).join('; ')}`)
     }
-    const result = parsed.value
+    const result = options.protection ? options.protection.sanitize(parsed.value) : parsed.value
 
     const content = result.content as unknown as JsonValue[]
     const text = extractText(content, rawName)
@@ -336,6 +345,18 @@ function createExecutor(
       projections.set(exec, { value, fallback, content: projected })
     }
     return value
+  }
+  return async (args, exec) => {
+    const protection = options.protection
+    await protection?.prepare?.()
+    const release = protection?.begin()
+    try {
+      await protection?.assertActive()
+      const value = await execute(args, exec)
+      await protection?.assertActive()
+      return protection ? protection.sanitize(value) : value
+    } catch (error) { throw await protectMachineFailure(protection, error) }
+    finally { release?.() }
   }
 }
 

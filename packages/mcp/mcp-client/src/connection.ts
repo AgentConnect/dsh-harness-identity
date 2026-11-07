@@ -1,3 +1,4 @@
+import type { MachineOutputProtection } from './machine-output.ts'
 /**
  * Connection supervisor: owns the MCP client/transport generations for one
  * plugin instance, keeps the harness tool registry in sync with the live
@@ -125,12 +126,18 @@ export interface ConnectionHandle extends ServerContext {
  * @param config - Resolved plugin config selecting the transport and server identity.
  * @param policy - Resolved reconnect policy from {@link resolveReconnectPolicy}.
  * @param status - Instance status cell this supervisor publishes transitions to.
+ * @param machine - Optional Host authentication fetch and current identity/output guard.
  * @returns Handle with a `ready` promise for startup-await and a `dispose` for teardown.
  */
-export function startConnection(ctx: Context, config: Config, policy: ResolvedReconnectPolicy, status: McpStatusCell): ConnectionHandle {
+export function startConnection(
+  ctx: Context, config: Config, policy: ResolvedReconnectPolicy, status: McpStatusCell,
+  machine?: { fetch: typeof fetch; protection: MachineOutputProtection },
+): ConnectionHandle {
   const label = `mcp-client(${config.serverName})`
   const binding = new McpTemplateBinding(ctx, config)
-  const diagnostic = (error: unknown, operation: string): string => binding.diagnostic(error, operation)
+  const diagnostic = (error: unknown, operation: string): string => machine
+    ? machine.protection.sanitize(binding.diagnostic(error, operation))
+    : binding.diagnostic(error, operation)
   const lifetime = new AbortController()
   const readiness = Promise.withResolvers<ConnectionOutcome>()
   type Generation = { wire: McpGeneration; connectedAt?: number }
@@ -187,6 +194,7 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
           serverName: config.serverName,
           toolCallTimeoutMs: config.toolCallTimeoutMs,
           signal,
+          ...(machine ? { protection: machine.protection } : {}),
           ...config.expandTemplates ? { redact: (text: string) => binding.redact(text) } : {},
         }, disposers, () => isCurrent(record))
       })
@@ -311,9 +319,10 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
         : config.startupTimeoutMs - (Date.now() - startedAt)
       const resolved = await record.wire.run(signal => binding.resolve(signal), remaining())
       bindingValue = { config: resolved }
-      await record.wire.connect(resolved, remaining())
+      await record.wire.connect(resolved, remaining(), machine?.fetch)
       if (!isCurrent(record)) return
-      const text = client.getInstructions()?.trimEnd() ?? ''
+      const text = machine ? machine.protection.sanitize(client.getInstructions()?.trimEnd() ?? '') : client.getInstructions()?.trimEnd() ?? ''
+      await machine?.protection.assertActive()
       const instructions = text ? `### MCP server: ${config.serverName}\n\n${text}` : ''
       const maxInstructionBytes = config.maxInstructionBytes ?? DEFAULT_MAX_INSTRUCTION_BYTES
       if (Buffer.byteLength(instructions) > maxInstructionBytes) throw new McpLocalError(`${label}: server instructions exceed maxInstructionBytes (${maxInstructionBytes})`)
@@ -331,7 +340,7 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
       if (current !== record) return
       current = undefined
       const confirmed = await close(record)
-      readiness.resolve({ error: config.expandTemplates ? new Error(diagnostic(error, 'startup')) : error })
+      readiness.resolve({ error: config.expandTemplates || machine ? new Error(diagnostic(error, 'startup')) : error })
       if (disposed || !confirmed) return
       if (error instanceof MissingTemplateValue) {
         bindingValue = {}
@@ -353,7 +362,9 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
         const record = current
         if (record?.connectedAt === undefined) throw new Error(`${label}: server is disconnected`)
         try {
-          return await record.wire.run(async (signal) => {
+          await machine?.protection.prepare?.()
+          await machine?.protection.assertActive()
+          const result = await record.wire.run(async (signal) => {
             const options = { signal: AbortSignal.any([signal, exec.signal]), timeout: config.toolCallTimeoutMs }
             const generation = record.wire.client
             // The SDK answers an unadvertised capability with the same empty page, but
@@ -377,7 +388,10 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
               default: return assertNever(request)
             }
           })
+          await machine?.protection.assertActive()
+          return machine ? machine.protection.sanitize(result) : result
         } catch (error) {
+          if (machine) throw new Error(diagnostic(error, request.method))
           if (config.expandTemplates) throw new Error(diagnostic(error, request.method))
           throw error
         }

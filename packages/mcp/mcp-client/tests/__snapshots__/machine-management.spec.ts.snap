@@ -1,0 +1,14 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`uses protected user Remote to stop SDK/tools, retains disabled across Loader restart, and explicitly reauthorizes enablement > authenticated machine status 1`] = `
+{
+  "ok": true,
+  "value": {
+    "authentication": "token_ready",
+    "connectionId": "managed",
+    "generation": 1,
+    "remoteRevocation": "not_requested",
+    "state": "ready",
+  },
+}
+`;
