@@ -32,15 +32,17 @@
     "./management-remote": {
       "types": "./lib/types/management-remote.d.ts",
       "default": "./lib/management-remote.js"
+    },
+    "./domain": {
+      "types": "./lib/types/domain.d.ts",
+      "default": "./lib/domain.js"
     }
   },
   "files": [
     "locale/*.json",
-    "lib/index.js",
+    "lib/*.js",
     "lib/types/**/*.js",
-    "lib/types/**/*.d.ts",
-    "lib/management.js",
-    "lib/management-remote.js"
+    "lib/types/**/*.d.ts"
   ],
   "license": "MIT",
   "peerDependencies": {
@@ -64,7 +66,8 @@
     "@modelcontextprotocol/client": "2.2.0",
     "@deepseek-ai/dsh-util-values": "workspace:*",
     "zod": "4.4.3",
-    "@deepseek-ai/dsh-atomic-write": "workspace:*"
+    "@deepseek-ai/dsh-atomic-write": "workspace:*",
+    "@deepseek-ai/dsh-brand": "workspace:*"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-attachment": "workspace:*",

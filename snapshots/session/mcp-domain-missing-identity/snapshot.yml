@@ -1,0 +1,8 @@
+version: 1
+scenario: mcp-domain-missing-identity
+profile: headless
+composition: mcp-domain-missing-identity
+recording: authored
+header:
+  class: mcp-domain-missing-identity
+  pin: true

@@ -14,15 +14,21 @@ denied.addSubnet('2001::', 23, 'ipv6')
 denied.addSubnet('2002::', 16, 'ipv6')
 denied.addSubnet('3fff::', 20, 'ipv6')
 
+/** Closed network failure, without response bodies or credentials. */
+export class MachineTransportError extends Error {
+  /** @param code - Network failure discriminant. */
+  constructor(readonly code: string) { super(code) }
+}
+
 /** Validate an exact HTTPS identity URL without rewriting its spelling.
  * @param value - Wire URL.
  * @returns Parsed URL after validation.
  */
 export function machineUrl(value: string): URL {
   let url: URL
-  try { url = new URL(value) } catch { throw new Error('invalid_target') }
+  try { url = new URL(value) } catch { throw new MachineTransportError('invalid_target') }
   if (url.protocol !== 'https:' || url.username || url.password || url.hash || url.search || value.length > 2048
-    || /\s|\\|[\u0000-\u001f]/u.test(value) || url.href !== value && url.href !== value + '/') throw new Error('invalid_target')
+    || /\s|\\|[\u0000-\u001f]/u.test(value) || url.href !== value && url.href !== value + '/') throw new MachineTransportError('invalid_target')
   return url
 }
 
@@ -42,16 +48,31 @@ export function publicAddress(address: string): boolean {
  */
 export function assertMachineDirectRoute(value: string | URL): void {
   const url = value instanceof URL ? value : machineUrl(value)
-  if (proxyRouteFor(url).proxied) throw new Error('proxy_egress_unsupported')
+  if (proxyRouteFor(url).proxied) throw new MachineTransportError('proxy_egress_unsupported')
 }
 
 /** Send one request to the validated DNS address; HTTPS still verifies the original hostname.
  * @param input - Request URL or Request object.
  * @param init - Fetch-compatible request fields.
+ * @param beforeSend - Optional final Host assertion after DNS and body preparation.
  * @returns A streaming response. Caller owns body cancellation.
  */
-export async function machineFetch(input: string | URL | Request, init: RequestInit = {}): Promise<Response> {
-  return requestMachine(input, init)
+export async function machineFetch(
+  input: string | URL | Request, init: RequestInit = {}, beforeSend?: () => Promise<void>,
+): Promise<Response> {
+  return requestMachine(input, init, undefined, false, beforeSend)
+}
+
+/** Host-opted direct HTTPS lane for arbitrary public targets, independent of ambient proxies.
+ * @param input - Exact HTTPS request.
+ * @param init - Request fields; redirects and ambient credentials remain disabled.
+ * @param beforeSend - Optional final Host assertion after DNS and body preparation.
+ * @returns Response after public DNS validation and address pinning.
+ */
+export function directPublicMachineFetch(
+  input: string | URL | Request, init: RequestInit = {}, beforeSend?: () => Promise<void>,
+): Promise<Response> {
+  return requestMachine(input, init, undefined, true, beforeSend)
 }
 
 /** Test-only exact-origin loopback transport with an explicit ephemeral CA.
@@ -60,25 +81,30 @@ export async function machineFetch(input: string | URL | Request, init: RequestI
  */
 export function createTestMachineFetch(options: { origin: string; ca: string }): typeof machineFetch {
   const url = machineUrl(options.origin)
-  if (process.env.NODE_ENV !== 'test' || url.origin !== options.origin || !['localhost', '127.0.0.1'].includes(url.hostname) || !options.ca) throw new Error('test_transport_forbidden')
-  return (input, init = {}) => requestMachine(input, init, options)
+  if (process.env.NODE_ENV !== 'test' || url.origin !== options.origin || !['localhost', '127.0.0.1'].includes(url.hostname) || !options.ca) throw new MachineTransportError('test_transport_forbidden')
+  return (input, init = {}, beforeSend) => requestMachine(input, init, options, false, beforeSend)
 }
 
-async function requestMachine(input: string | URL | Request, init: RequestInit, test?: { origin: string; ca: string }): Promise<Response> {
+async function requestMachine(
+  input: string | URL | Request, init: RequestInit, test?: { origin: string; ca: string },
+  publicDirect = false, beforeSend?: () => Promise<void>,
+): Promise<Response> {
   if (!(input instanceof Request)) machineUrl(String(input))
   const outgoing = new Request(input, { ...init, redirect: 'manual', credentials: 'omit' })
   try {
-    if (outgoing.headers.has('host')) throw new Error('managed_authentication_header')
+    if (outgoing.headers.has('host')) throw new MachineTransportError('managed_authentication_header')
     const url = machineUrl(outgoing.url)
-    assertMachineDirectRoute(url)
-    if (test && url.origin !== test.origin) throw new Error('unsafe_target')
+    if (!publicDirect) assertMachineDirectRoute(url)
+    if (test && url.origin !== test.origin) throw new MachineTransportError('unsafe_target')
     const signal = AbortSignal.any([outgoing.signal, AbortSignal.timeout(30000)])
-    if (signal.aborted) throw new Error('network_failure')
+    if (signal.aborted) throw new MachineTransportError('network_failure')
     const addresses = await withAbort(lookup(url.hostname.replace(/^\[|\]$/gu, ''), { all: true, verbatim: true }), signal)
-    if (addresses.length > 32 || addresses.some(value => !publicAddress(value.address) && !(test && url.origin === test.origin && (value.address === '::1' || /^127(?:\.[0-9]{1,3}){3}$/u.test(value.address))))) throw new Error('unsafe_target')
+    if (addresses.length > 32 || addresses.some(value => !publicAddress(value.address) && !(test && url.origin === test.origin && (value.address === '::1' || /^127(?:\.[0-9]{1,3}){3}$/u.test(value.address))))) throw new MachineTransportError('unsafe_target')
     const selected = (test ? addresses.find(value => value.address === '127.0.0.1') : undefined) ?? addresses[0]
-    if (!selected) throw new Error('unsafe_target')
+    if (!selected) throw new MachineTransportError('unsafe_target')
     const body = await requestBody(outgoing, signal)
+    await beforeSend?.()
+    signal.throwIfAborted()
     return await new Promise<Response>((resolve, reject) => {
       const req = request(url, {
         method: outgoing.method, headers: Object.fromEntries(outgoing.headers), signal,
@@ -100,13 +126,13 @@ async function requestMachine(input: string | URL | Request, init: RequestInit, 
         if ([204, 205, 304].includes(status)) { response.resume(); resolve(new Response(null, { status, headers })); return }
         resolve(new Response(Readable.toWeb(response) as ReadableStream<Uint8Array>, { status, headers }))
       })
-      req.on('error', () => reject(new Error('network_failure')))
+      req.on('error', () => reject(new MachineTransportError('network_failure')))
       req.end(body)
     })
   } catch (error) {
     try { await outgoing.body?.cancel() } catch { /* The body reader owns its read failure and may already be closed. */ }
-    if (error instanceof Error && ['unsafe_target', 'invalid_target', 'request_too_large', 'managed_authentication_header', 'proxy_egress_unsupported'].includes(error.message)) throw error
-    throw new Error('network_failure')
+    if (error instanceof MachineTransportError) throw error
+    throw new MachineTransportError('network_failure')
   }
 }
 
@@ -120,19 +146,19 @@ export async function machineJson(response: Response): Promise<Record<string, un
   const chunks: Uint8Array[] = []
   try {
     if ((response.headers.get('content-type') ?? '').split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
-      throw new Error('incompatible_metadata')
+      throw new MachineTransportError('incompatible_metadata')
     }
     while (reader) {
       const next = await reader.read()
       if (next.done) break
       bytes += next.value.length
-      if (bytes > 65536) throw new Error('response_too_large')
+      if (bytes > 65536) throw new MachineTransportError('response_too_large')
       chunks.push(next.value)
     }
     const value = strictJson(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.concat(chunks)))
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('incompatible_metadata')
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new MachineTransportError('incompatible_metadata')
     return value as Record<string, unknown>
-  } catch { throw new Error('incompatible_metadata') }
+  } catch { throw new MachineTransportError('incompatible_metadata') }
   finally {
     try { await reader?.cancel() } catch { /* The read failure is already normalized; cancellation must not replace it. */ }
     reader?.releaseLock()
@@ -150,7 +176,7 @@ async function requestBody(outgoing: Request, signal: AbortSignal): Promise<Buff
       const next = await withAbort(reader.read(), signal)
       if (next.done) return Buffer.concat(chunks)
       bytes += next.value.length
-      if (bytes > 1024 * 1024) throw new Error('request_too_large')
+      if (bytes > 1024 * 1024) throw new MachineTransportError('request_too_large')
       chunks.push(next.value)
     }
   } finally {
@@ -171,16 +197,16 @@ function strictJson(text: string): unknown {
       if (char === '\\') index++
       else if (char === '"') return JSON.parse(text.slice(start, index)) as string
     }
-    throw new Error('incompatible_metadata')
+    throw new MachineTransportError('incompatible_metadata')
   }
   const visit = (depth: number): void => {
-    if (depth > 32) throw new Error('incompatible_metadata')
+    if (depth > 32) throw new MachineTransportError('incompatible_metadata')
     whitespace()
     if (text[index] === '{') {
       index++; whitespace(); const names = new Set<string>()
       while (text[index] !== '}') {
         const name = string()
-        if (names.has(name)) throw new Error('incompatible_metadata')
+        if (names.has(name)) throw new MachineTransportError('incompatible_metadata')
         names.add(name); whitespace(); index++; visit(depth + 1); whitespace()
         if (text[index] !== ',') break
         index++; whitespace()
@@ -203,10 +229,10 @@ function strictJson(text: string): unknown {
 
 /** Abort a DNS/body wait without leaving an abort listener behind. */
 async function withAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) throw new Error('network_failure')
+  if (signal.aborted) throw new MachineTransportError('network_failure')
   let stop!: () => void
   const aborted = new Promise<never>((_resolve, reject) => {
-    stop = () => reject(new Error('network_failure'))
+    stop = () => reject(new MachineTransportError('network_failure'))
     signal.addEventListener('abort', stop, { once: true })
   })
   try { return await Promise.race([operation, aborted]) }

@@ -16,6 +16,7 @@ English | [中文](README.zh.md)
 - [Use this package](#use-this-package)
 - [Understand the implementation](#understand-the-implementation)
 - [Further Exploration](#further-exploration)
+- [Domain connector](#domain-connector)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
 - [Dev Note](#dev-note)
@@ -176,6 +177,18 @@ Read these pages when the package-level contract is not enough. They move from t
 - [Generated configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-mcp-client) — every accepted config field and its source declaration.
 
 -----
+
+## Domain connector
+
+The optional `@deepseek-ai/dsh-mcp-client/domain` Loader entry (`enabled: true`, optional `maxConnections`, default 32) registers `mcp_connect({domain, scopes?})`. The shared identity Host must explicitly enable its global `domainAccess` policy and allow this exact installed consumer. The connector discovers the actual MCP resource from domain-level Protected Resource Metadata, verifies the resource's own metadata and compatible CIMD/ES256 client-credentials AS, selects globally permitted advertised read scopes, and reuses the normal SDK supervisor and encrypted connection store. It does not rewrite profile files or require per-domain server rows. Unsupported discovery/authentication returns a closed error rather than guessing `/mcp` or using another login flow. Additional advertised scopes use the single-operation consent flow below; they never widen that persistent read connection. Remote discovery uses the existing DNS-pinned, public-only, no-redirect transport; the existing proxy policy is the default. The explicit one-time `publicDirectHttps: true` Host option authorizes this connector alone to use pinned direct public HTTPS independently of ambient proxies; no per-domain `NO_PROXY` entries or changes to model traffic are needed. Encryption keys are atomically stored in per-connection Host credential records, never model results. Existing disabled/history fences are never reset by reconnect. Connections and their tools are removed when the connector unloads. Existing configured server instances are unchanged.
+
+### Single-operation consent
+
+Domain business calls run without another dialog only when the advertised tool explicitly sets both `readOnlyHint: true` and `destructiveHint: false`. Missing or conflicting hints require owner consent; names such as `get` or `list` are never inferred safe. Each other call automatically opens the shared identity dialog, binding the resource, raw tool name, canonical arguments and scopes to one execution. Refusal, timeout, cancellation or unload cannot authorize a send. Permanent grants cannot satisfy this path. The transport rechecks the current permission after DNS/token/body awaits and permits at most one physical `tools/call` matching the approved name and arguments; unknown outcomes are not replayed.
+
+`mcp_connect({domain, scopes})` with advertised scopes outside the global read policy asks for a metadata-only tool-discovery approval. It returns opaque `operationRef` values without changing the read connection. `mcp_call_once({operationRef, arguments})` then asks for a separate exact-operation decision and uses a fresh SDK session. Metadata-only consent cannot call business tools or read additional resources. Elevated sessions register no tools, attempt session termination and token revocation, and are never reused by another approval. Results expose `credentialRevocation`; an unconfirmed remote revocation is not represented as confirmed.
+
+One-shot state remains encrypted with a protected Host credential key, and its sent-bearer history is retained even after local disconnect. A domain-owned redactor restores these histories before later model output, including after restart. Missing keys or corrupt history fail closed. Automatic history retirement is deferred; `maxOneShotRecords` (default 512, maximum 4096) bounds retained one-shot records and refuses further acquisition at the limit rather than dropping still-relevant receipts. Owner wait defaults to 120000 ms (`approvalWaitMs`), polling to 1000 ms (`approvalPollMs`), each one-shot SDK phase to 60000 ms (`oneShotTimeoutMs`), discovered operation lifetime to 300000 ms (`operationRefTtlMs`), and the live reference budget to 256 (`maxDiscoveredOperations`). Expired or changed operation declarations require discovery again. Existing explicitly configured server instances do not adopt this domain-only policy implicitly.
 
 <a id="model-experience"></a>
 ## Model Experience

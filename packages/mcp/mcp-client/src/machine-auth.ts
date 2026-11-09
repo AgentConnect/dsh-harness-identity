@@ -7,7 +7,7 @@ import { discoverMachineTarget } from './machine-discovery.ts'
 import { machineFetch, machineJson, assertMachineDirectRoute } from './machine-http.ts'
 import { MachineConnectionStore } from './machine-store.ts'
 import type { MachineToken } from './machine-store.ts'
-import type { MachineAuthentication, MachineIdentityService, MachineSignerLease, MachineTarget } from './machine-types.ts'
+import type { MachineAuthentication, MachineIdentityService, MachineIdentityClient, MachineSignerLease, MachineTarget } from './machine-types.ts'
 import { MachineBearerRedactor } from './machine-output.ts'
 import type { MachineOutputProtection } from './machine-output.ts'
 
@@ -60,7 +60,8 @@ export class MachineAuthenticationSession {
   constructor(ctx: Context, private readonly config: MachineAuthentication, endpoint: string,
     private readonly send: typeof machineFetch = machineFetch,
     explicitEnable?: { generation: number; authorize: () => void },
-    private readonly redactor = new MachineBearerRedactor()) {
+    private readonly redactor = new MachineBearerRedactor(), readEncryptionKey?: () => Promise<Buffer>,
+    private readonly assertRoute: (url: string) => void = assertMachineDirectRoute, identityClient?: MachineIdentityClient) {
     config = structuredClone(config)
     this.config = config
     this.managementAuthorization = explicitEnable?.authorize
@@ -71,19 +72,21 @@ export class MachineAuthenticationSession {
     try {
       const identity = ctx.get('anpIdentity') as MachineIdentityService | undefined
       const credentials = ctx.get('credentials') as Credentials | undefined
-      if (!identity || !credentials) throw new Error('machine_auth_provider_unavailable')
-      this.store = new MachineConnectionStore(config.stateRoot, config.connectionId, async () => {
-        const resolved = await credentials.resolve(config.encryptionKeyRef)
+      if (!identity && !identityClient || !credentials && !readEncryptionKey) throw new Error('machine_auth_provider_unavailable')
+      this.store = new MachineConnectionStore(config.stateRoot, config.connectionId, readEncryptionKey ?? (async () => {
+        const resolved = await credentials?.resolve(config.encryptionKeyRef)
         if (!resolved || !/^[A-Za-z0-9_-]{43}$/u.test(resolved.value)) throw new Error('credential_store_unavailable')
         return Buffer.from(resolved.value, 'base64url')
-      })
+      }))
       this.refreshTarget = async () => {
         const publicSend: typeof machineFetch = (url, init = {}) => { if (this.closing) return Promise.reject(new Error('connection_disabled')); return send(url, { ...init, signal: AbortSignal.any([this.controller.signal, ...(init.signal ? [init.signal] : [])]) }) }
         const target = await discoverMachineTarget(endpoint, config.issuer, publicSend, config.discoveryCacheMs)
         if (this.disposed || this.closing) throw new Error('connection_disabled')
-        assertMachineDirectRoute(target.resource)
-        assertMachineDirectRoute(target.tokenEndpoint)
-        const lease = await identity.bindProtocolConsumer(ctx).registerValidatedTarget({ identityRef: config.identityRef,
+        this.assertRoute(target.resource)
+        this.assertRoute(target.tokenEndpoint)
+        const protocolIdentity = identityClient ?? identity?.bindProtocolConsumer(ctx)
+        if (!protocolIdentity) throw new Error('machine_auth_provider_unavailable')
+        const lease = await protocolIdentity.registerValidatedTarget({ identityRef: config.identityRef,
           policyRef: config.policyRef, discovery: target, requestedScopes: config.requestedScopes })
         try {
           await lease.assertActive()
@@ -150,7 +153,7 @@ export class MachineAuthenticationSession {
     const request = new Request(input, init)
     if (request.url !== binding.target.resource) throw new Error('resource_mismatch')
     if (request.headers.has('host') || request.headers.has('authorization') || request.headers.has('poppy-session') || request.headers.has('dpop')) throw new Error('managed_authentication_header')
-    assertMachineDirectRoute(binding.target.resource)
+    this.assertRoute(binding.target.resource)
     const token = await this.acquire(binding)
     await this.assertBinding(binding)
     if (this.disposed || this.closing) throw new Error('connection_disabled')
@@ -261,7 +264,7 @@ export class MachineAuthenticationSession {
     }
   }
   private async issue(binding: Binding): Promise<MachineToken> {
-    assertMachineDirectRoute(binding.target.tokenEndpoint)
+    this.assertRoute(binding.target.tokenEndpoint)
     const client = await binding.lease.getOAuthClientIdentity()
     const assertion = await binding.lease.signOAuthClientAssertion(binding.lease.targetRef)
     this.redactor.rememberAssertion(assertion)
@@ -348,7 +351,7 @@ export class MachineAuthenticationSession {
         this.revocation = 'remote_revocation_unconfirmed'
         if (binding?.target.revocationEndpoint && token) {
           try {
-            assertMachineDirectRoute(binding.target.revocationEndpoint)
+            this.assertRoute(binding.target.revocationEndpoint)
             await binding.lease.assertActive()
             const client = await binding.lease.getOAuthClientIdentity()
             const assertion = await binding.lease.signOAuthClientAssertion(binding.lease.targetRef)

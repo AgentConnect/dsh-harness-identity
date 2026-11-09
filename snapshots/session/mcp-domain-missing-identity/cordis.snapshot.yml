@@ -1,0 +1,25 @@
+- id: llm-deepseek
+  disabled: true
+
+- insert:
+    - id: llm-replay
+      name: '@deepseek-ai/dsh-llm-replay'
+      config:
+        providers:
+          - id: deepseek-official
+            name: DeepSeek
+            models:
+              - id: deepseek-flash
+                contextWindow: 1000000
+                defaultMaxTokens: 256000
+                reasoningEfforts: [off, low, high, max]
+                defaultReasoningEffort: max
+
+# The template resolves through the credential store, which the headless profile disables.
+- id: credentials
+  disabled: false
+
+- insert:
+    - id: mcp-domain
+      name: '@deepseek-ai/dsh-mcp-client/domain'
+      config: { enabled: true }

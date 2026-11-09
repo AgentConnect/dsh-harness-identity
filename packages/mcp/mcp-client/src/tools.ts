@@ -26,8 +26,27 @@ import type { JsonSchemaNode } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { describeError, McpLocalError } from './diagnostic.ts'
 
+/** Advertised MCP tool fields used by a Host-owned operation policy. */
+export interface McpConsentTool {
+  name: string
+  annotations?: { readOnlyHint?: boolean | undefined; destructiveHint?: boolean | undefined } | undefined
+}
+/** Exact logical call and the current SDK invocation, captured before any consent wait. */
+export interface McpToolCall {
+  tool: McpConsentTool
+  args: Record<string, unknown>
+  execution: ToolExecution
+  invoke(): ReturnType<Client['callTool']>
+}
+/** Host policy invoked inside the executor; absence preserves configured-server behavior. */
+export type McpToolCallGate = (call: McpToolCall) => ReturnType<Client['callTool']>
+
 /** Resolved options relevant to tool bridging. */
 export interface ToolBridgeOptions {
+  /** Domain-only policy for exact single-operation consent. */
+  callGate?: McpToolCallGate
+  /** Total budget including waiting for the owner. */
+  callGateTimeoutMs?: number
   protection?: MachineOutputProtection
   serverName: string
   toolCallTimeoutMs: number
@@ -150,6 +169,7 @@ export async function syncTools(
     definitions.set(publicName, createMcpToolDefinition(ctx, {
       ...(opts.protection ? { protection: opts.protection } : {}),
       name: publicName,
+      ...(opts.callGateTimeoutMs === undefined ? {} : { timeoutMs: opts.callGateTimeoutMs }),
       rawName: tool.name,
       description: tool.description ?? '',
       inputSchema: tool.inputSchema,
@@ -157,11 +177,13 @@ export async function syncTools(
       taskRequired: tool.execution?.taskSupport === 'required',
       call: async (args, execution) => {
         try {
-          const result = await client.callTool(
-            { name: tool.name, arguments: args },
+          const frozenArgs = structuredClone(args)
+          const invoke = () => client.callTool(
+            { name: tool.name, arguments: frozenArgs },
             { signal: AbortSignal.any([execution.signal, opts.signal]),
               timeout: opts.toolCallTimeoutMs, toolDefinition: tool },
           )
+          const result = opts.callGate ? await opts.callGate({ tool, args: frozenArgs, execution, invoke }) : await invoke()
           if (result.isError !== true || opts.redact === undefined) return result
           return { isError: true, content: [{ type: 'text', text: opts.redact(extractText(result.content as JsonValue[], tool.name)) }] }
         } catch (error) {
@@ -227,6 +249,8 @@ function supportedOutputSchema(candidate: unknown): JsonSchemaNode | undefined {
 
 /** One upstream MCP tool and the callback that obtains its raw protocol result. */
 export interface McpToolDefinitionOptions {
+  /** Optional total execution budget, including Host consent. */
+  timeoutMs?: number
   /** ToolRuntime name presented to the model. */
   name: string
   /** Host-only current identity and output guard for machine connections. */
@@ -266,6 +290,7 @@ export function createMcpToolDefinition(
   return {
     name,
     description,
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     parameters: inputSchema,
     output: createOutput(rawName, supportedOutputSchema(options.outputSchema)),
     execute: createExecutor(ctx, options, projections),

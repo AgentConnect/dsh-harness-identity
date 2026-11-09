@@ -8,13 +8,15 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { MachineConnectionStore } from '../src/machine-store.ts'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, FiberState } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import Tools from '@deepseek-ai/dsh-tools'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import * as McpClient from '../src/index.ts'
+import * as DomainConnector from '../src/domain.ts'
+import type { CredentialKey, CredentialRecord } from '@deepseek-ai/dsh-credentials'
 
 const { requests, tokens } = vi.hoisted(() => ({ requests: [] as Array<{ url: string; method?: string }>, tokens: [] as string[] }))
 vi.mock('../src/machine-http.ts', async (importOriginal) => {
@@ -23,7 +25,7 @@ vi.mock('../src/machine-http.ts', async (importOriginal) => {
     const request = new Request(input, init)
     requests.push({ url: request.url, method: request.method })
     const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } })
-    if (request.url.includes('oauth-protected-resource')) return json({ resource: 'https://resource.example/mcp', authorization_servers: ['https://issuer.example'] })
+    if (request.url.includes('oauth-protected-resource')) return json({ resource: 'https://resource.example/mcp', authorization_servers: ['https://issuer.example'], scopes_supported: ['agent.self.read', 'message.write'] })
     if (request.url.includes('oauth-authorization-server')) return json({ issuer: 'https://issuer.example', token_endpoint: 'https://issuer.example/token', client_id_metadata_document_supported: true, grant_types_supported: ['client_credentials'], token_endpoint_auth_methods_supported: ['private_key_jwt'], token_endpoint_auth_signing_alg_values_supported: ['ES256'] })
     if (request.url === 'https://issuer.example/token') {
       const form = new URLSearchParams(await request.text())
@@ -36,9 +38,10 @@ vi.mock('../src/machine-http.ts', async (importOriginal) => {
     if (request.method === 'GET') return new Response(null, { status: 405 })
     const body = await request.json() as { id?: number; method?: string }
     switch (body.method) {
+      case 'server/discover': return json({ jsonrpc:'2.0',id:body.id,error:{ code:-32601,message:'Method not found' } })
       case 'initialize': return json({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1' } } })
       case 'notifications/initialized': return new Response(null, { status: 202 })
-      case 'tools/list': return json({ jsonrpc: '2.0', id: body.id, result: { tools: [{ name: 'identity_get', description: 'Read the current machine identity.', inputSchema: { type: 'object', properties: {} } }] } })
+      case 'tools/list': return json({ jsonrpc: '2.0', id: body.id, result: { tools: [{ name: 'identity_get', annotations:{ readOnlyHint:true,destructiveHint:false }, description: 'Read the current machine identity.', inputSchema: { type: 'object', properties: {} } }] } })
       case 'tools/call': return json({ jsonrpc: '2.0', id: body.id, result: { content: [{ type: 'text', text: 'did:web:agent.example' }] } })
       default: throw new Error('unexpected_mcp_method')
     }
@@ -108,10 +111,11 @@ it('keeps real Loader scopes independent while enforcing Host-wide machine conne
     expect(ctx.tools.get('mcp__shared__identity_get', second)).toBeDefined()
     expect(tokens).toHaveLength(2)
     const before = requests.length
-    await expect((async () => {
-      await duplicate.ctx.plugin(CapturedInclude, { path: pathToFileURL(files[2]!).href })
-      await trees[2]!.await()
-    })()).rejects.toThrow('machine_connection_id_conflict')
+    await duplicate.ctx.plugin(CapturedInclude, { path: pathToFileURL(files[2]!).href })
+    await trees[2]!.await()
+    // Loader.await contains plugin failures; admission is observed on the owning Fiber.
+    expect([...trees[2]!.entries()].find(entry => entry.options.name === '@deepseek-ai/dsh-mcp-client')?.fiber?.state).toBe(FiberState.FAILED)
+    expect(ctx.tools.get('mcp__shared__identity_get', duplicate)).toBeUndefined()
     expect(requests).toHaveLength(before)
     const firstStore = new MachineConnectionStore(stateRoot, 'loader-scope-one', async () => Buffer.alloc(32, 51))
     await firstStore.disable()
@@ -121,4 +125,70 @@ it('keeps real Loader scopes independent while enforcing Host-wide machine conne
     expect(JSON.stringify(result)).toContain('did:web:agent.example')
     expect(tokens).toHaveLength(2)
   } finally { await ctx.fiber.dispose() }
+})
+
+
+it('connects from only a domain through real Loader and SDK, reuses connections, preserves fences and unloads tools', async () => {
+  directory = await mkdtemp(join(tmpdir(), 'mcp-domain-loader-'))
+  const stateRoot = join(directory, 'domain-state')
+  const file = join(directory, 'cordis.yml')
+  await writeFile(file, '- name: \'@fixture/domain-host\'\n- name: \'@deepseek-ai/dsh-mcp-client/domain\'\n  config: { enabled: true }\n')
+  const records = new Map<CredentialKey, CredentialRecord>()
+  let domainEnabled = true, consentRequests = 0
+  const host = { name: 'domain-host-fixture', apply(ctx: Context) {
+    ctx.provide('credentials', { async modifyRecord(key: CredentialKey, mutate: (record: CredentialRecord | undefined) => Promise<CredentialRecord | undefined>) {
+      const next = await mutate(records.get(key)); if (next) records.set(key, next); return records.get(key)
+    } })
+    ctx.provide('anpIdentity', {
+      bindDomainOperationConsumer() {return { request:async()=>{consentRequests++;return { id:'denied-extra',status:'denied',version:1 }},status:async()=>{throw new Error('No pending consent')},cancel:async()=>{throw new Error('No pending consent')},execute:async()=>{throw new Error('Read must not execute a consent')} }},
+      async resolveDomainAccess() {
+        if (!domainEnabled) throw Object.assign(new Error('Disabled'), { code:'domain_access_disabled' })
+        return { identityRef: { storeId:'store', identityId:'identity', did:'did:web:agent.example' }, policyRef:'domain-policy', scopes:['agent.self.read'], stateRoot }
+      },
+      bindProtocolConsumer() { return { registerValidatedTarget: async (input: { requestedScopes:string[] }) => {
+        expect(input.requestedScopes).toEqual(['agent.self.read'])
+        const targetRef = Object.freeze({})
+        return { targetRef,policyGeneration:1,assertActive:async()=>{},getOAuthClientIdentity:async()=>({ clientId:'https://identity.example/client.json',algorithm:'ES256',version:1,keyId:'key',signerMode:'local' }),signOAuthClientAssertion:async()=> 'domain-fixture-assertion',dispose(){} }
+      } } },
+    })
+  } }
+  const ctx = context = new Context()
+  await mountAgentLoopTestDependencies(ctx)
+  const agents = await mountAgentLoopTestHarness(ctx)
+  const agent = await agents.create(SessionId('domain-agent'))
+  ctx.baseUrl = pathToFileURL(directory).href + '/'
+  await ctx.plugin(Loader); ctx.loader.builtins.include = Include
+  const modules = new Map<string, unknown>([['@fixture/domain-host',host],['@deepseek-ai/dsh-mcp-client/domain',DomainConnector]])
+  const internal = ctx.loader.internal
+  if (!internal) throw new Error('Node module loader is unavailable')
+  ctx.loader.internal = { ...internal,import:async(name:string)=>modules.get(name) }
+  await ctx.loader.create({ name:'cordis:include',config:{ path:pathToFileURL(file).href } }); await ctx.loader.await()
+  let serial=0
+  const connect = (domain='website.example', scopes?:string[]) => executeToolFixture(ctx,{ agent,name:'mcp_connect',arguments:{ domain,...(scopes?{ scopes }:{}) },callId:ToolCallId(`domain-${serial++}`),signal:new AbortController().signal })
+  const connected = await connect()
+  expect(connected.value).toMatchObject({ ok:true,state:'ready',resource:'https://resource.example/mcp' })
+  const result = connected.value as { serverName:string;connectionId:string }
+  const business = `mcp__${result.serverName}__identity_get`
+  expect(ctx.tools.get(business)).toBeDefined()
+  expect((await executeToolFixture(ctx,{ agent,name:business,arguments:{},callId:ToolCallId('domain-read'),signal:new AbortController().signal })).content).toEqual([{ type:'text',text:'did:web:agent.example' }])
+  await Promise.all([connect(),connect('alias.example')])
+  expect(tokens).toHaveLength(1)
+  expect(records.size).toBe(1)
+  expect((await connect('website.example',['message.write'])).value).toMatchObject({ ok:false,error:'identity_authorization_denied' })
+  expect(consentRequests).toBe(1)
+  expect(tokens).toHaveLength(1)
+  domainEnabled=false
+  expect((await connect()).value).toEqual({ ok:false,error:'domain_access_disabled' })
+  domainEnabled=true
+  const key = [...records.values()][0]!
+  if(key.kind!=='api-key' || !key.key) throw new Error('Missing isolated test key')
+  const store = new MachineConnectionStore(stateRoot,result.connectionId,async()=>Buffer.from(key.key!,'base64url'))
+  await store.disable()
+  expect((await connect()).value).toMatchObject({ ok:false,state:'disconnected',error:'connection_disabled' })
+  expect(JSON.stringify(connected)).not.toContain('private-fixture-token')
+  expect(JSON.stringify(connected)).not.toContain('domain-fixture-assertion')
+  const entry=[...ctx.loader.entries()].find(entry=>entry.options.name==='@deepseek-ai/dsh-mcp-client/domain')!
+  await entry.fiber!.dispose()
+  expect(ctx.tools.get('mcp_connect')).toBeUndefined()
+  expect(ctx.tools.get(business)).toBeUndefined()
 })

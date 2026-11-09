@@ -29,7 +29,7 @@ import { McpGeneration } from './generation.ts'
 import { McpTemplateBinding } from './credentials.ts'
 import { MissingTemplateValue } from './templates.ts'
 import { McpToolRegistrationError, syncTools } from './tools.ts'
-import type { ToolDisposers } from './tools.ts'
+import type { ToolDisposers, McpToolCallGate } from './tools.ts'
 import type { Config } from './index.ts'
 
 /** Automatic reconnect policy for one MCP server connection. */
@@ -131,7 +131,7 @@ export interface ConnectionHandle extends ServerContext {
  */
 export function startConnection(
   ctx: Context, config: Config, policy: ResolvedReconnectPolicy, status: McpStatusCell,
-  machine?: { fetch: typeof fetch; protection: MachineOutputProtection },
+  machine?: { fetch: typeof fetch; protection: MachineOutputProtection; callGate?: McpToolCallGate; callGateTimeoutMs?: number },
 ): ConnectionHandle {
   const label = `mcp-client(${config.serverName})`
   const binding = new McpTemplateBinding(ctx, config)
@@ -195,6 +195,7 @@ export function startConnection(
           toolCallTimeoutMs: config.toolCallTimeoutMs,
           signal,
           ...(machine ? { protection: machine.protection } : {}),
+          ...(machine?.callGate ? { callGate: machine.callGate, callGateTimeoutMs: machine.callGateTimeoutMs } : {}),
           ...config.expandTemplates ? { redact: (text: string) => binding.redact(text) } : {},
         }, disposers, () => isCurrent(record))
       })

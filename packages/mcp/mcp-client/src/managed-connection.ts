@@ -8,7 +8,9 @@ import { startConnection } from './connection.ts'
 import { MachineAuthenticationSession } from './machine-auth.ts'
 import { MachineConnectionStore } from './machine-store.ts'
 import type { MachineConnectionStatus } from './management-types.ts'
+import type { McpToolCallGate } from './tools.ts'
 import type { MachineAuthentication } from './machine-types.ts'
+import type { machineFetch } from './machine-http.ts'
 import { MachineBearerRedactor } from './machine-output.ts'
 import { MachineHistoryQuarantine } from './machine-history.ts'
 import type { MachineHistoryRecoveryRule } from './machine-history.ts'
@@ -27,18 +29,27 @@ export class ManagedConnection {
   private remoteRevocation: MachineConnectionStatus['remoteRevocation'] = 'not_requested'
   private closing = false
   private historyUnavailable = false
-  private readonly redactor = new MachineBearerRedactor()
+  private readonly redactor: MachineBearerRedactor
   private readonly quarantine = new MachineHistoryQuarantine()
   constructor(private readonly ctx: Context, private readonly config: MachineConfig,
-    private readonly reconnect: ResolvedReconnectPolicy, private readonly supervisorStatus: McpStatusCell) {
+    private readonly reconnect: ResolvedReconnectPolicy, private readonly supervisorStatus: McpStatusCell,
+    private readonly readEncryptionKey?: () => Promise<Buffer>,
+    private readonly network?: { fetch: typeof machineFetch; assertRoute(url: string): void },
+    private readonly domainTools?: {
+      callGate: McpToolCallGate
+      timeoutMs: number
+      redactor: MachineBearerRedactor
+      assertHistory(): Promise<void>
+    }) {
     config = structuredClone(config); this.config = config
+    this.redactor = domainTools?.redactor ?? new MachineBearerRedactor()
     this.store = new MachineConnectionStore(config.authentication.stateRoot, config.authentication.connectionId,
-      async () => {
+      readEncryptionKey ?? (async () => {
         const credentials = this.ctx.get('credentials') as { resolve(ref: string): Promise<{ value: string } | undefined> } | undefined
         const resolved = await credentials?.resolve(config.authentication.encryptionKeyRef)
         if (!resolved || !/^[A-Za-z0-9_-]{43}$/u.test(resolved.value)) throw new Error('credential_store_unavailable')
         return Buffer.from(resolved.value, 'base64url')
-      })
+      }))
   }
   /** Start only if the persisted configuration is enabled.
    * @returns The real SDK's initial connection outcome, or a disabled no-op.
@@ -69,13 +80,25 @@ export class ManagedConnection {
     if (this.stopped || !this.enabled) throw new Error('connection_disabled')
     explicitEnable?.authorize()
     const machine = this.machine = new MachineAuthenticationSession(
-      this.ctx, this.config.authentication, this.config.url, undefined, explicitEnable, this.redactor)
+      this.ctx, this.config.authentication, this.config.url, this.network?.fetch, explicitEnable, this.redactor,
+      this.readEncryptionKey, this.network?.assertRoute,
+    )
+    const baseProtection = machine.outputProtection()
+    const domainTools = this.domainTools
+    const protection = domainTools ? { ...baseProtection,
+      prepare: async () => { await domainTools.assertHistory(); await baseProtection.prepare?.() },
+      assertActive: async () => { await baseProtection.assertActive(); await domainTools.assertHistory() },
+    } : baseProtection
     this.connection = startConnection(this.ctx, this.config, this.reconnect,
-      this.supervisorStatus, { fetch: machine.fetch, protection: machine.outputProtection() })
+      this.supervisorStatus, { fetch: machine.fetch, protection,
+        ...(domainTools ? { callGate: domainTools.callGate, callGateTimeoutMs: domainTools.timeoutMs } : {}) })
     return this.connection.ready
   }
-  /** Expose sanitized instructions through the current upstream server-context seam. */
+  /** Expose sanitized instructions through the current upstream server-context seam.
+   * @returns Current attributed server instructions, or an empty string while unavailable.
+   */
   instructions(): string { return this.connection?.instructions() ?? '' }
+  /** Resource requests remain bound to the current enabled connection and identity generation. */
   readonly resources: ServerContext['resources'] = {
     request: async (request, execution) => {
       if (!this.enabled || !this.connection) throw new Error('connection_disabled')

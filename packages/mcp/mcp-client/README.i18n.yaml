@@ -12,8 +12,8 @@
   en: 428cc4078a9d5b53
   zh: 49b867131f518c0f
 /deepseek-ai-dsh-mcp-client/table-of-contents:
-  en: d152484eb41ac6b4
-  zh: 09388d293f9be9cb
+  en: 699eadfc13ad01e5
+  zh: 7e1c8e5b324472ef
 /deepseek-ai-dsh-mcp-client/use-this-package:
   en: e77871d58566601a
   zh: c5ef229d22eb3ebf
@@ -51,8 +51,14 @@
   en: fef482a6f8cc789f
   zh: 08f4c594ec83b4a1
 /deepseek-ai-dsh-mcp-client/further-exploration:
-  en: 1374f838098f1fc4
-  zh: a8393b3130fd7a72
+  en: c967704dd8c260ff
+  zh: 46b3e122eab6308e
+/deepseek-ai-dsh-mcp-client/domain-connector:
+  en: 90a5a94f906e75ce
+  zh: dd158d51f867aae4
+/deepseek-ai-dsh-mcp-client/domain-connector/single-operation-consent:
+  en: f0841d0526a41b54
+  zh: e456984cc45375b6
 /deepseek-ai-dsh-mcp-client/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90
