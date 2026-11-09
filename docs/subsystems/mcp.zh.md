@@ -21,6 +21,8 @@
 <a id="configuration"></a>
 ## 配置
 
+可选机器连接注册表向已安装的所有者集成提供 `MachineConnectionManager`，并保留 `ManagedMachineConnection` 记录以控制生命周期。它们定义于[客户端管理契约](../../packages/mcp/mcp-client/src/management-types.ts)，仅供 Host 使用，不是模型工具或共享域名权限 API。
+
 MCP 服务器需要主动配置。在目标 Cordis 作用域中，为每台服务器配置一个 `@deepseek-ai/dsh-mcp-client` 条目。每个随附 profile 都提供[工具注册表](tools.zh.md)，并统一挂载共享资源服务一次；用户只需配置客户端条目。调用方没有可见的已配置服务器时，在 native 或 PTC 模式下都不会获得 MCP 提示词文本或工具。
 
 Web 与 Desktop profile 还统一挂载一次 [MCP 服务器管理器](../../packages/mcp/mcp-manager/README.zh.md)。它运行通过 Settings 配置的服务器，以及已安装插件在自身生命周期内注册的服务器，并向 Remote 客户端提供它们的状态、重启与探测操作。
@@ -121,6 +123,30 @@ interface McpResourceProvider {
 ## Cordis API
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.zh.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+
+<a id="ctxmcpconnections--mcpconnections"></a>
+
+### `ctx.mcpConnections` — `McpConnections`
+
+Host-only registry; bound management capabilities are never model tools.
+
+```ts cordis-catalog
+/** Bind management to an actual installed Host plugin, rechecked on every operation.
+ * @param context - Current Loader-owned manager context, never a consumer name.
+ * @returns A capability restricted to public state and explicit lifecycle actions.
+ */
+bindManager(context: Context): MachineConnectionManager
+
+/** Register a configured connection from its actual MCP Loader context.
+ * @param context - Installed MCP plugin owning the supervisor and signer session.
+ * @param id - Stable Host connection id.
+ * @param connection - Controls closed over the owner context and immutable configuration.
+ * @returns Removal after the owner has quiesced its work.
+ */
+register(context: Context, id: string, connection: ManagedMachineConnection): () => void
+```
+
+Source: [`packages/mcp/mcp-client/src/management.ts`](../../packages/mcp/mcp-client/src/management.ts)
 
 <a id="ctxmcpmanager--mcpservermanager"></a>
 

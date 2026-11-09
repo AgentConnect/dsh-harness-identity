@@ -21,6 +21,8 @@ Model Context Protocol (MCP) connects the model to tools supplied by external se
 <a id="configuration"></a>
 ## Configuration
 
+The optional machine-connection registry exposes `MachineConnectionManager` to installed owner integrations and retains `ManagedMachineConnection` records for lifecycle control. These Host-only types are defined in the [client management contract](../../packages/mcp/mcp-client/src/management-types.ts); they are not model tools or the shared domain permission API.
+
 MCP servers are opt-in. Configure one `@deepseek-ai/dsh-mcp-client` entry per server in the intended Cordis scope. Every shipped profile supplies the [tool registry](tools.md) and mounts the shared resource service once; users configure only client entries. Callers with no visible configured server receive no MCP prompt text or tools in native or PTC mode.
 
 The Web and Desktop profiles also mount the [MCP server manager](../../packages/mcp/mcp-manager/README.md) once. It runs servers configured through Settings and servers that installed plugins register for their own lifetime, and serves their status, restart, and probe operations to Remote clients.
@@ -121,6 +123,30 @@ MCP prompt templates, human-input elicitation, task-based execution, and resourc
 ## Cordis API
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+
+<a id="ctxmcpconnections--mcpconnections"></a>
+
+### `ctx.mcpConnections` — `McpConnections`
+
+Host-only registry; bound management capabilities are never model tools.
+
+```ts cordis-catalog
+/** Bind management to an actual installed Host plugin, rechecked on every operation.
+ * @param context - Current Loader-owned manager context, never a consumer name.
+ * @returns A capability restricted to public state and explicit lifecycle actions.
+ */
+bindManager(context: Context): MachineConnectionManager
+
+/** Register a configured connection from its actual MCP Loader context.
+ * @param context - Installed MCP plugin owning the supervisor and signer session.
+ * @param id - Stable Host connection id.
+ * @param connection - Controls closed over the owner context and immutable configuration.
+ * @returns Removal after the owner has quiesced its work.
+ */
+register(context: Context, id: string, connection: ManagedMachineConnection): () => void
+```
+
+Source: [`packages/mcp/mcp-client/src/management.ts`](../../packages/mcp/mcp-client/src/management.ts)
 
 <a id="ctxmcpmanager--mcpservermanager"></a>
 

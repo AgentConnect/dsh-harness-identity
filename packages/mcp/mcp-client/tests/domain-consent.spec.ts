@@ -9,6 +9,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { McpDomainConsent } from '../src/domain-consent.ts'
 import type { McpToolCallGate } from '../src/tools.ts'
 import type { machineFetch } from '../src/machine-http.ts'
+import { domainPolicyFixture } from './fixtures/domain-policy.ts'
 
 type GateInput = Parameters<McpToolCallGate>[0]
 type ConsentOptions = ConstructorParameters<typeof McpDomainConsent>[0]
@@ -22,15 +23,17 @@ function tool(name = 'write', annotations?: GateInput['tool']['annotations']): G
   return { name, ...(annotations === undefined ? {} : { annotations }) }
 }
 
-async function fixture(options: { waitMs?: number; holdSend?: boolean; sendError?: Error } = {}) {
+async function fixture(options: { waitMs?: number; holdSend?: boolean; sendError?: Error; scopes?: string[]; resource?: string } = {}) {
   const ctx = new Context(); roots.push(ctx)
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(Tools)
   await ctx.plugin(NativeToolExecutor)
   const lifetime = new AbortController()
-  ctx.effect(() => () => lifetime.abort())
+  ctx.effect(() => () =>{  lifetime.abort() })
   let decision: Decision = { id: 'approval-request', status: 'pending', version: 1 }
   let requestCount = 0, executeCount = 0, cancelCount = 0, revoked = false
+  let allowedCount = 0
+  const policy = domainPolicyFixture()
   let requested!: () => void
   const requestStarted = new Promise<void>((resolve) => { requested = resolve })
   let releaseSend!: () => void
@@ -41,6 +44,7 @@ async function fixture(options: { waitMs?: number; holdSend?: boolean; sendError
   const physical: Request[] = []
   const assertActive = async () => { if (revoked) throw new Error('owner_revoked') }
   const consent: ConsentClient = {
+    async executeAllowed(_request, _authorization, effect) { allowedCount++; await assertActive(); return effect(assertActive) },
     async request(input) { requestCount++; approvedRequests.push(input.request.clone()); requested(); return { ...decision } },
     async status() { return { ...decision } },
     async cancel() { cancelCount++; decision = { ...decision, status: 'cancelled', version: decision.version + 1 }; return { ...decision } },
@@ -50,7 +54,7 @@ async function fixture(options: { waitMs?: number; holdSend?: boolean; sendError
       return effect(assertActive)
     },
   }
-  const send: typeof machineFetch = async (input, init = {}, beforeSend?: () => Promise<void>) => {
+  const send: typeof machineFetch = async (input, init, beforeSend?: () => Promise<void>) => {
     enteredSend()
     if (options.holdSend) await sendGate
     await beforeSend?.()
@@ -58,10 +62,13 @@ async function fixture(options: { waitMs?: number; holdSend?: boolean; sendError
     if (options.sendError) throw options.sendError
     return Response.json({ jsonrpc: '2.0', id: 'wire-call', result: { content: [{ type: 'text', text: 'ok' }] } })
   }
-  const guard = new McpDomainConsent({ resource, issuer: 'https://issuer.example', scopes: ['protocol.read'],
+  const endpoint = options.resource ?? resource
+  const guard = new McpDomainConsent({ resource: endpoint, issuer: 'https://issuer.example', scopes: options.scopes ?? ['protocol.read'],
+    policy: policy.client, target: policy.client.register({ discoveryOrigin: 'https://website.example', destinations: [new URL(endpoint).origin] }),
     approvalWaitMs: options.waitMs ?? 1000, approvalPollMs: 10, signal: lifetime.signal, consent, assertActive, send })
+  ctx.effect(() => () =>{  guard.dispose() })
   let serial = 0
-  const wire = (raw: string, args: Record<string, unknown>) => new Request(resource, { method: 'POST', headers: { 'content-type': 'application/json' },
+  const wire = (raw: string, args: Record<string, unknown>) => new Request(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 'wire-call', method: 'tools/call', params: { name: raw, arguments: args } }) })
   const run = (definition: GateInput['tool'], args: Record<string, unknown> = { message: 'approved' },
     control: {
@@ -86,10 +93,10 @@ async function fixture(options: { waitMs?: number; holdSend?: boolean; sendError
       name, arguments: args, callId: ToolCallId(name), signal: control.signal ?? new AbortController().signal,
     })
   }
-  return { guard, run, wire, physical, approvedRequests, requestStarted, sendStarted, releaseSend,
+  return { guard, policy, run, wire, physical, approvedRequests, requestStarted, sendStarted, releaseSend,
     approve(mode: 'once' | 'permanent' = 'once') { decision = { ...decision, status: 'approved', version: decision.version + 1, grantId: 'approved-grant', mode } },
     deny() { decision = { ...decision, status: 'denied', version: decision.version + 1 } },
-    revoke() { revoked = true }, abort() { lifetime.abort() }, counts: () => ({ requestCount, executeCount, cancelCount }) }
+    revoke() { revoked = true }, abort() { lifetime.abort() }, counts: () => ({ requestCount, executeCount, cancelCount, allowedCount }) }
 }
 
 it('automatically invokes only affirmative non-destructive reads', async () => {
@@ -98,6 +105,70 @@ it('automatically invokes only affirmative non-destructive reads', async () => {
   expect(result.isError).toBe(false)
   expect(f.counts()).toMatchObject({ requestCount: 0, executeCount: 0 })
   expect(f.physical).toHaveLength(1)
+})
+it('uses saved all-write permission without an owner dialog and blocks a saved read denial', async () => {
+  const writer = await fixture(); writer.policy.set('write', 'allow')
+  expect((await writer.run(tool('write', { readOnlyHint: false, destructiveHint: true }))).isError).toBe(false)
+  expect(writer.counts()).toMatchObject({ requestCount: 0, allowedCount: 1 }); expect(writer.physical).toHaveLength(1)
+  const denied = await fixture(); denied.policy.set('read', 'deny')
+  expect((await denied.run(tool('read', { readOnlyHint: true, destructiveHint: false }))).isError).toBe(true)
+  expect(denied.counts().requestCount).toBe(0); expect(denied.physical).toHaveLength(0)
+})
+it('checks scope privilege separately from business read hints and does not auto-allow unknown scopes', async () => {
+  const f = await fixture({ scopes: ['account.admin'] })
+  const pending = f.run(tool('read', { readOnlyHint: true, destructiveHint: false }))
+  await f.requestStarted; expect(f.physical).toHaveLength(0)
+  f.approve(); expect((await pending).isError).toBe(false); expect(f.physical).toHaveLength(1)
+})
+it('cancels the earlier pending decision after a policy revision instead of using a late approval', async () => {
+  const f = await fixture(), pending = f.run(tool('write', { readOnlyHint: false }))
+  await f.requestStarted; f.policy.set('write', 'allow')
+  expect((await pending).isError).toBe(true); expect(f.counts().cancelCount).toBe(1)
+  f.approve(); expect(f.physical).toHaveLength(0)
+})
+it('rechecks saved permission after asynchronous transport setup immediately before a physical send', async () => {
+  const f = await fixture({ holdSend: true }); f.policy.set('write', 'allow')
+  const pending = f.run(tool('write', { readOnlyHint: false }))
+  await f.sendStarted; f.policy.set('write', 'deny'); f.releaseSend()
+  expect((await pending).isError).toBe(true); expect(f.physical).toHaveLength(0); expect(f.counts().requestCount).toBe(0)
+})
+it('keeps declared payments and missing semantic hints on the ask path under all-write permission', async () => {
+  for (const definition of [tool('payment', { paymentHint: true }), tool('unknown')]) {
+    const f = await fixture(); f.policy.set('write', 'allow')
+    const pending = f.run(definition); await f.requestStarted; expect(f.physical).toHaveLength(0)
+    f.deny(); expect((await pending).isError).toBe(true); expect(f.physical).toHaveLength(0)
+  }
+})
+it('applies exact-payload protection to a bare-origin resource after Request canonicalizes its trailing slash', async () => {
+  const f = await fixture({ resource: 'https://resource.example' })
+  const pending = f.run(tool('write', { readOnlyHint: false }), { amount: 3 }, { mutate: { amount: 300 } })
+  await f.requestStarted; f.approve()
+  expect((await pending).isError).toBe(true); expect(f.physical).toHaveLength(0)
+})
+it('does not let a late callback reuse a finished business-call context under saved write permission', async () => {
+  const f = await fixture(); f.policy.set('write', 'allow')
+  let release!: () => void
+  const barrier = new Promise<void>((resolve) => { release = resolve })
+  let late: Promise<unknown> = Promise.resolve()
+  await f.guard.withWireCall('write', {}, new AbortController().signal, false, async () => {}, async () => {
+    late = barrier.then(() => f.guard.fetch(f.wire('write', {}))).catch((error: unknown) => error)
+  })
+  release()
+  expect(await late).toBeInstanceOf(Error); expect(f.physical).toHaveLength(0)
+})
+it('rechecks delayed SDK metadata against current read policy instead of retaining a finished startup admission', async () => {
+  const f = await fixture()
+  const target = f.policy.client.register({ discoveryOrigin: 'https://website.example', destinations: [new URL(resource).origin] })
+  const old = await f.policy.client.evaluate(target, { url: resource, effect: 'read', extraPermissions: false })
+  let release!: () => void
+  const barrier = new Promise<void>((resolve) => { release = resolve })
+  let late: Promise<unknown> = Promise.resolve()
+  await f.guard.withWireCall('__mcp_tools_list__', {}, new AbortController().signal, true, () => old.assertActive(), async () => {
+    late = barrier.then(() => f.guard.fetch(new Request(resource, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 'metadata', method: 'tools/list' }) }))).catch((error: unknown) => error)
+  })
+  f.policy.set('write', 'allow'); release()
+  expect(await late).toBeInstanceOf(Response); expect(f.physical).toHaveLength(1)
+  f.policy.client.forget(target)
 })
 
 it.each([
@@ -137,7 +208,7 @@ it('cancels a pending request and cannot send after a late approval', async () =
     await f.requestStarted
     if (unload) f.abort(); else caller.abort()
     expect((await pending).isError).toBe(true)
-    await vi.waitFor(() => expect(f.counts().cancelCount).toBe(1))
+    await vi.waitFor(() =>{  expect(f.counts().cancelCount).toBe(1) })
     f.approve(); expect(f.physical).toEqual([])
   }
 })

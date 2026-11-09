@@ -2040,6 +2040,25 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'mcpConnections',
+    summary: 'Host-only registry; bound management capabilities are never model tools.',
+    description: 'Host-only registry; bound management capabilities are never model tools.',
+    methods: [
+      {
+        signature: 'bindManager(context: Context): MachineConnectionManager',
+        description: 'Bind management to an actual installed Host plugin, rechecked on every operation.',
+        parameters: [{ name: 'context', description: 'Current Loader-owned manager context, never a consumer name.' }],
+        returns: 'A capability restricted to public state and explicit lifecycle actions.',
+      },
+      {
+        signature: 'register(context: Context, id: string, connection: ManagedMachineConnection): () => void',
+        description: 'Register a configured connection from its actual MCP Loader context.',
+        parameters: [{ name: 'context', description: 'Installed MCP plugin owning the supervisor and signer session.' }, { name: 'id', description: 'Stable Host connection id.' }, { name: 'connection', description: 'Controls closed over the owner context and immutable configuration.' }],
+        returns: 'Removal after the owner has quiesced its work.',
+      },
+    ],
+  },
+  {
     key: 'mcpManager',
     summary: 'The manager service.',
     description: 'The manager service. Reconciliation and `restart` serialize instance replacement. Probes run independently and are cancelled before replacement or disposal waits for their cleanup.',
@@ -7086,6 +7105,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'LspRange',
     declaration: 'export interface LspRange {\n    readonly start: LspPosition;\n    readonly end: LspPosition;\n}',
+  },
+  {
+    name: 'MachineConnectionManager',
+    declaration: 'export interface MachineConnectionManager {\n    status(connectionId: string): Promise<MachineConnectionStatus>;\n    disconnect(connectionId: string): Promise<MachineConnectionStatus>;\n    enable(connectionId: string): Promise<MachineConnectionStatus>;\n}',
+  },
+  {
+    name: 'MachineConnectionStatus',
+    declaration: 'export interface MachineConnectionStatus {\n    connectionId: string;\n    state: \'discovering\' | \'connecting\' | \'ready\' | \'retry_wait\' | \'blocked\' | \'disconnecting\' | \'disconnected\';\n    generation: number;\n    remoteRevocation: \'not_requested\' | \'confirmed\' | \'remote_revocation_unconfirmed\';\n    authentication: \'discovering\' | \'binding_ready\' | \'token_ready\' | \'blocked\' | \'stopped\';\n    historyState?: \'migration_required\' | \'quarantine\';\n    migrationId?: string;\n}',
+  },
+  {
+    name: 'MachineHistoryRecoveryRule',
+    declaration: 'export interface MachineHistoryRecoveryRule {\n    connectionId: string;\n    migrationId: string;\n    kind: \'old-writers-stopped\' | \'prior-bearers-invalidated\';\n    evidenceRef: string;\n}',
+  },
+  {
+    name: 'ManagedMachineConnection',
+    declaration: 'export interface ManagedMachineConnection {\n    status(): Promise<MachineConnectionStatus>;\n    disconnect(): Promise<void>;\n    enable(authorize: () => void, recovery?: MachineHistoryRecoveryRule): Promise<void>;\n}',
   },
   {
     name: 'ManagementError',

@@ -54,11 +54,11 @@
   en: c967704dd8c260ff
   zh: 46b3e122eab6308e
 /deepseek-ai-dsh-mcp-client/domain-connector:
-  en: 90a5a94f906e75ce
-  zh: dd158d51f867aae4
-/deepseek-ai-dsh-mcp-client/domain-connector/single-operation-consent:
-  en: f0841d0526a41b54
-  zh: e456984cc45375b6
+  en: c7ccf515f861018a
+  zh: bbd2bb91de30d7f9
+/deepseek-ai-dsh-mcp-client/domain-connector/shared-permission-and-single-operation-execution:
+  en: 183701ec2b75c277
+  zh: 12fc8ed3583a3921
 /deepseek-ai-dsh-mcp-client/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90

@@ -265,7 +265,7 @@
     },
     {
       "name": "mcp_call_once",
-      "description": "Invoke an opaque operationRef returned by mcp_connect after advertised extra-scope discovery. A new owner dialog binds the exact service, raw tool, arguments and scopes; only one call executes. Does not enable permanent write access or widen a read connection. Denial/cancel never sends; unknown writes must not be retried.",
+      "description": "Invoke an operationRef from mcp_connect with one isolated SDK lifetime. Shared rules decide: allow directly, ask through automatic exact-operation confirmation, deny without sending. Releasing the temporary signer does not erase saved permissions. Use only the discovered reference and arguments, never invented URLs or scopes. Unknown write outcomes must not be retried.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -288,7 +288,7 @@
     },
     {
       "name": "mcp_connect",
-      "description": "Connect MCP from a domain: discover the actual endpoint and authentication metadata, use the Host default public identity and permitted scopes, then register its mcp__ tools. No per-domain configuration or pasted tokens. Missing global permission or default identity needs one owner decision, not a manually configured server. Read scopes create/reuse a persistent read connection. Additional advertised scopes trigger a metadata-only owner dialog, return opaque operationRefs, and never widen that connection; use mcp_call_once for an exact discovered operation. Request only scopes necessary for the user task.",
+      "description": "Discover MCP from a domain using the default published identity and shared read/write/domain rules. No per-site configuration or pasted tokens. Omitted scopes select one unambiguous advertised read scope; scope_selection_required includes availableScopes for a minimum task-specific selection. Ready connections register mcp__ tools; one-shot-discovery returns operationRefs for mcp_call_once. Allow executes directly, ask opens confirmation, deny sends no business request. Unknown or extra privileges still ask. Do not request every scope or retry uncertain writes.",
       "parameters": {
         "type": "object",
         "properties": {

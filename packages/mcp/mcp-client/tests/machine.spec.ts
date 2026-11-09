@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { discoverMachineTarget } from '../src/machine-discovery.ts'
@@ -12,6 +12,7 @@ import { MachineAuthenticationSession } from '../src/machine-auth.ts'
 import { MachineConnectionStore } from '../src/machine-store.ts'
 import type { MachineAuthentication } from '../src/machine-types.ts'
 
+const inputUrl = (input: string | URL | Request) => input instanceof Request ? input.url : input.toString()
 const endpoint = 'https://resource.example/mcp'
 const issuer = 'https://auth.example/tenant'
 const tokenEndpoint = issuer + '/oauth/token'
@@ -31,7 +32,8 @@ async function fixture(overrides: {
   const stateRoot = await root()
   let revoked = false
   const targetRef = Object.freeze({})
-  const assertions = vi.fn(async (ref: object) => { expect(ref).toBe(targetRef); return 'assertion-' + assertions.mock.calls.length })
+  let assertionCount = 0
+  const assertions = vi.fn(async (ref: object): Promise<string> => { expect(ref).toBe(targetRef); return `assertion-${++assertionCount}` })
   const lease = { targetRef, policyGeneration: 1, getOAuthClientIdentity: async () => ({ clientId: 'https://identity.example/client.json', keyId: 'did:web:identity.example#oauth', version: 1, algorithm: 'ES256', signerMode: 'local' }),
     assertActive: async () => { if (revoked) throw new Error('permission_revoked') }, signOAuthClientAssertion: assertions, dispose: vi.fn() }
   const key = randomBytes(32).toString('base64url')
@@ -46,19 +48,19 @@ async function fixture(overrides: {
     if (request.url === endpoint) { resourceRequests.push(request); return overrides.resource ? overrides.resource() : json({ jsonrpc: '2.0', result: {} }) }
     throw new Error('unexpected_test_destination')
   }
-  const config: MachineAuthentication = { mode: 'cimd-client-credentials', connectionId: 'stable-connection', identityRef: { did: 'did:web:identity.example', storeId: 'store', identityId: 'identity' }, policyRef: 'machine-policy', requestedScopes: ['agent.self.read'], stateRoot, encryptionKeyRef: 'MCP_STORE_KEY', ...(overrides.cacheMs === undefined ? {} : { discoveryCacheMs: overrides.cacheMs }), tokenRetry: { maxAttempts: 2, initialDelayMs: 1, maxDelayMs: 5 } }
+  const config: MachineAuthentication = { mode: 'cimd-client-credentials', connectionId: 'machine-' + randomUUID(), identityRef: { did: 'did:web:identity.example', storeId: 'store', identityId: 'identity' }, policyRef: 'machine-policy', requestedScopes: ['agent.self.read'], stateRoot, encryptionKeyRef: 'MCP_STORE_KEY', ...(overrides.cacheMs === undefined ? {} : { discoveryCacheMs: overrides.cacheMs }), tokenRetry: { maxAttempts: 2, initialDelayMs: 1, maxDelayMs: 5 } }
   const session = new MachineAuthenticationSession(ctx, config, endpoint, send)
   return { stateRoot, config, send, ctx, session, tokenRequests, resourceRequests, assertions, revoke: () => { revoked = true } }
 }
 
 describe('public machine discovery', () => {
   it('requires exact resource, selected issuer, explicit grant/auth/algorithm and CIMD support', async () => {
-    const send = vi.fn<typeof machineFetch>(async input => String(input).includes('oauth-protected-resource') ? json(prm) : json(as))
+    const send = vi.fn<typeof machineFetch>(async input => inputUrl(input).includes('oauth-protected-resource') ? json(prm) : json(as))
     const discovered = await discoverMachineTarget(endpoint, undefined, send)
     expect(discovered).toMatchObject({ resource: endpoint, issuer, tokenEndpoint, profile: 'mcp_machine' })
-    expect(send.mock.calls.map(call => String(call[0]))).toEqual(['https://resource.example/.well-known/oauth-protected-resource/mcp', 'https://auth.example/.well-known/oauth-authorization-server/tenant'])
+    expect(send.mock.calls.map(call => inputUrl(call[0]))).toEqual(['https://resource.example/.well-known/oauth-protected-resource/mcp', 'https://auth.example/.well-known/oauth-authorization-server/tenant'])
     for (const change of [{ issuer: 'https://other.example' }, { client_id_metadata_document_supported: false }, { grant_types_supported: ['authorization_code'] }, { token_endpoint_auth_methods_supported: ['none'] }, { token_endpoint_auth_signing_alg_values_supported: ['EdDSA'] }]) {
-      await expect(discoverMachineTarget(endpoint, undefined, async input => String(input).includes('oauth-protected-resource') ? json(prm) : json({ ...as, ...change }))).rejects.toThrow()
+      await expect(discoverMachineTarget(endpoint, undefined, async input => inputUrl(input).includes('oauth-protected-resource') ? json(prm) : json({ ...as, ...change }))).rejects.toThrow()
     }
     await expect(discoverMachineTarget(endpoint, undefined, async () => json({ ...prm, authorization_servers: [issuer, 'https://second.example'] }))).rejects.toThrow('issuer_selection_required')
     await expect(discoverMachineTarget(endpoint, undefined, async () => json({ ...prm, resource: 'https://resource.example/other' }))).rejects.toThrow('incompatible_resource')
@@ -127,7 +129,7 @@ describe('machine tokens and transport', () => {
     const f = await fixture({ response: () => hold })
     const pending = f.session.fetch(endpoint)
     const rejected = expect(pending).rejects.toThrow()
-    await vi.waitFor(() => expect(f.tokenRequests).toHaveLength(1))
+    await vi.waitFor(() => { expect(f.tokenRequests).toHaveLength(1) })
     f.revoke()
     release(json({ access_token: 'late-secret', token_type: 'Bearer', expires_in: 60 }))
     await rejected
@@ -146,7 +148,7 @@ describe('machine tokens and transport', () => {
     try {
       const old = f.session.fetch(endpoint)
       const rejected = expect(old).rejects.toThrow('connection_generation_changed')
-      await vi.waitFor(() => expect(f.tokenRequests).toHaveLength(1))
+      await vi.waitFor(() => { expect(f.tokenRequests).toHaveLength(1) })
       now += 1001; version = 2
       await f.session.fetch(endpoint)
       release(json({ access_token: 'old-binding-token', token_type: 'Bearer', expires_in: 60 }))
@@ -169,8 +171,8 @@ describe('machine tokens and transport', () => {
     const child = spawn(process.execPath, ['--import', 'tsx/esm', '--input-type=module', '-e', script, directory], {
       env: { ...process.env, TSX_TSCONFIG_PATH: join(process.cwd(), 'tsconfig.base.json') }, stdio: ['ignore', 'pipe', 'pipe'] })
     child.stderr.resume()
-    const exited = new Promise<void>((resolve) => { child.once('exit', () => resolve()) })
-    await Promise.race([new Promise<void>(resolve => child.stdout.once('data', () => resolve())), exited.then(() => { throw new Error('lock_fixture_failed') })])
+    const exited = new Promise<void>((resolve) => { child.once('exit', () => { resolve() }) })
+    await Promise.race([new Promise<void>((resolve) => { child.stdout.once('data', () => { resolve() }) }), exited.then(() => { throw new Error('lock_fixture_failed') })])
     child.kill('SIGKILL'); await exited
     const store = new MachineConnectionStore(directory, 'crash', async () => Buffer.alloc(32))
     const gen = await store.open('partition')
@@ -178,7 +180,8 @@ describe('machine tokens and transport', () => {
     await store.commit(gen, { token: 'recovered', partition: 'partition', acquiredAt: Date.now(), expiresAt: Date.now() + 60000, scopes: ['read'] })
     expect((await store.token(gen, 'partition'))?.token).toBe('recovered')
   })
-  it('cannot revive a disabled fence when the lock holder dies during key resolution', async () => {
+  // This case identifies and kills the lock-holder child through Linux procfs.
+  it.skipIf(process.platform !== 'linux')('cannot revive a disabled fence when the lock holder dies during key resolution', async () => {
     const directory = await root()
     let release!: () => void; let entered!: () => void
     const hold = new Promise<void>((resolve) => { release = resolve })
@@ -278,11 +281,13 @@ it('rechecks a different process durable fence after the final history/lease awa
   const f = await fixture(); await f.session.fetch(endpoint)
   const binding = (f.session as unknown as { binding: { lease: { assertActive(): Promise<void> } } }).binding
   const lease = binding.lease; const originalLease = lease.assertActive.bind(lease)
-  const originalRemember = MachineConnectionStore.prototype.rememberSent
+  const originalRemember = Object.getOwnPropertyDescriptor(MachineConnectionStore.prototype, 'rememberSent')?.value as MachineConnectionStore['rememberSent'] | undefined
+  const remember = vi.spyOn(MachineConnectionStore.prototype, 'rememberSent')
+  if (!originalRemember) throw new Error('Missing original sent-history method')
   let armed = false; let held = false; let entered!: () => void; let release!: () => void
   const waiting = new Promise<void>((resolve) => { entered = resolve })
   const pause = new Promise<void>((resolve) => { release = resolve })
-  const remember = vi.spyOn(MachineConnectionStore.prototype, 'rememberSent').mockImplementation(async function (this: MachineConnectionStore, ...args) {
+  remember.mockImplementation(async function (this: MachineConnectionStore, ...args) {
     const result = await originalRemember.apply(this, args); armed = true; return result
   })
   const checking = vi.spyOn(lease, 'assertActive').mockImplementation(async () => {

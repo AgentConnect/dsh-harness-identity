@@ -16,8 +16,11 @@ import { afterEach, expect, it, vi } from 'vitest'
 import type { DomainOperationClient } from '../src/domain-consent.ts'
 import type { MachineIdentityClient } from '../src/machine-types.ts'
 import * as DomainConnector from '../src/domain.ts'
+import { domainPolicyFixture } from './fixtures/domain-policy.ts'
 
 const remote = vi.hoisted(() => ({
+  resource: 'https://resource.example/mcp',
+  advertisedScopes: ['agent.self.read', 'message.write'],
   tokens: [] as Array<{ value: string; scope: string }>,
   calls: [] as Array<{ token: string; method: string; params?: { name: string; arguments: Record<string, unknown> } }>,
   revoked: [] as string[],
@@ -31,7 +34,7 @@ vi.mock('../src/machine-http.ts', async (importOriginal) => {
     // Exercise the physical-send assertion, not just the logical consent wrapper.
     await beforeSend?.()
     const json = (value: unknown, headers?: Record<string, string>) => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json', ...headers } })
-    if (request.url.includes('oauth-protected-resource')) return json({ resource: 'https://resource.example/mcp', authorization_servers: ['https://issuer.example'], scopes_supported: ['agent.self.read', 'message.write'] })
+    if (request.url.includes('oauth-protected-resource')) return json({ resource: remote.resource, authorization_servers: ['https://issuer.example'], scopes_supported: remote.advertisedScopes })
     if (request.url.includes('oauth-authorization-server')) return json({ issuer: 'https://issuer.example', token_endpoint: 'https://issuer.example/token', revocation_endpoint: 'https://issuer.example/revoke', client_id_metadata_document_supported: true, grant_types_supported: ['client_credentials'], token_endpoint_auth_methods_supported: ['private_key_jwt'], token_endpoint_auth_signing_alg_values_supported: ['ES256'] })
     if (request.url === 'https://issuer.example/token') {
       const form = new URLSearchParams(await request.text())
@@ -46,7 +49,7 @@ vi.mock('../src/machine-http.ts', async (importOriginal) => {
       return new Response(null, { status: 200 })
     }
     const token = remote.tokens.find(value => request.headers.get('authorization') === `Bearer ${value.value}`)
-    if (request.url !== 'https://resource.example/mcp' || !token) throw new Error('Unexpected authenticated request')
+    if (request.url !== new URL(remote.resource).href || !token) throw new Error('Unexpected authenticated request')
     if (request.method === 'GET') return new Response(null, { status: 405 })
     if (request.method === 'DELETE') { remote.closed.push(token.value); return new Response(null, { status: 200 }) }
     const body = await request.json() as { id?: number; method: string; params?: { name: string; arguments: Record<string, unknown> } }
@@ -74,6 +77,8 @@ afterEach(async () => {
   if (directory) await rm(directory, { recursive: true, force: true })
   directory = undefined
   remote.tokens.splice(0); remote.calls.splice(0); remote.revoked.splice(0); remote.closed.splice(0)
+  remote.advertisedScopes = ['agent.self.read', 'message.write']
+  remote.resource = 'https://resource.example/mcp'
 })
 
 async function fixture() {
@@ -84,6 +89,7 @@ async function fixture() {
   const records = new Map<CredentialKey, CredentialRecord>()
   const approvals: Array<{ requestId: string; purpose: string; body: string }> = []
   const grants = new Map<string, string>()
+  const policy = domainPolicyFixture()
   const admittedScopes: string[][] = []
   let approve = true
   const signer: MachineIdentityClient = { async registerValidatedTarget(input) {
@@ -94,6 +100,7 @@ async function fixture() {
   } }
   // This external owner fixture approves explicitly; the consumer gets no approval method.
   const owner: DomainOperationClient = {
+    async executeAllowed(_request, _authorization, effect) { return effect(async () => {}, { machineIdentity: signer }) },
     async request(input) {
       const body = await input.request.text()
       approvals.push({ requestId: input.requestId, purpose: input.purpose, body })
@@ -110,6 +117,7 @@ async function fixture() {
       return effect(async () => {}, { machineIdentity: signer })
     },
   }
+  let defaultEpoch = 'read-policy'
   const host = { name: 'domain-owner-fixture', apply(ctx: Context) {
     ctx.provide('credentials', { async modifyRecord(key: CredentialKey, mutate: (record: CredentialRecord | undefined) => Promise<CredentialRecord | undefined>) {
       const next = await mutate(records.get(key))
@@ -117,9 +125,10 @@ async function fixture() {
       return records.get(key)
     } })
     ctx.provide('anpIdentity', {
+      bindProtocolPolicy: () => policy.client,
       bindDomainOperationConsumer: () => owner,
       bindProtocolConsumer: () => signer,
-      resolveDomainAccess: async () => ({ identityRef: { storeId: 'store', identityId: 'identity', did: 'did:web:agent.example' }, policyRef: 'read-policy', scopes: ['agent.self.read'], stateRoot }),
+      resolveDomainAccess: async () => ({ identityRef: { storeId: 'store', identityId: 'identity', did: 'did:web:agent.example' }, policyRef: defaultEpoch, scopes: ['agent.self.read'], stateRoot }),
     })
   } }
   const ctx = context = new Context()
@@ -148,7 +157,7 @@ async function fixture() {
   let serial = 0
   const call = (name: string, args: Record<string, unknown>) => executeToolFixture(ctx, { agent, name, arguments: args, callId: ToolCallId(`once-${serial++}`), signal: new AbortController().signal })
   const connect = (scopes?: string[]) => call('mcp_connect', { domain: 'website.example', ...(scopes ? { scopes } : {}) })
-  return { ctx, records, approvals, admittedScopes, stateRoot, call, connect, reload, deny: () => { approve = false } }
+  return { ctx, policy, records, approvals, admittedScopes, stateRoot, call, connect, reload, changeDefaultEpoch: () => { defaultEpoch += '-next' }, deny: () => { approve = false } }
 }
 
 function discoveredOperation(value: unknown): string {
@@ -165,7 +174,7 @@ it('uses separate metadata and exact-write approvals without widening the persis
   const read = connected.value as { serverName: string }
   const persistent = remote.tokens[0]!
   const elevated = await host.connect(['message.write'])
-  expect(elevated.value).toMatchObject({ ok: true, mode: 'one-shot-discovery', persistentConnectionWidened: false })
+  expect(elevated.value, JSON.stringify(elevated.value)).toMatchObject({ ok: true, mode: 'one-shot-discovery', persistentConnectionWidened: false })
   expect(host.approvals).toHaveLength(1)
   expect(JSON.parse(host.approvals[0]!.body)).toEqual({ protocol: 'mcp', resource: 'https://resource.example/mcp', issuer: 'https://issuer.example', tool: { name: '__mcp_tools_list__', arguments: {} }, scopes: ['message.write'] })
   expect(remote.calls.filter(call => call.method === 'tools/call')).toHaveLength(0)
@@ -206,6 +215,52 @@ it('rejects fabricated operation references before requesting consent or acquiri
   expect(host.approvals).toHaveLength(0)
   expect(remote.tokens).toHaveLength(0)
   expect(remote.calls).toHaveLength(0)
+})
+it('uses saved write permission without dialogs, then blocks revocation before acquiring another token', async () => {
+  const host = await fixture(); host.policy.set('write', 'allow')
+  const elevated = await host.connect(['message.write'])
+  expect(elevated.value).toMatchObject({ ok: true, mode: 'one-shot-discovery' })
+  const operationRef = discoveredOperation(elevated.value)
+  expect((await host.call('mcp_call_once', { operationRef, arguments: { text: 'saved rule' } })).value).toMatchObject({ ok: true })
+  expect(host.approvals).toHaveLength(0); expect(remote.tokens).toHaveLength(2)
+  expect(remote.calls.filter(call => call.method === 'tools/call')).toHaveLength(1)
+  host.policy.set('write', 'deny')
+  expect((await host.call('mcp_call_once', { operationRef, arguments: { text: 'not sent' } })).value).toEqual({ ok: false, error: 'protocol_permission_denied' })
+  expect(remote.tokens).toHaveLength(2); expect(remote.calls.filter(call => call.method === 'tools/call')).toHaveLength(1)
+})
+it('binds a write whitelist to the original discovery domain rather than a shared endpoint', async () => {
+  const host = await fixture(); host.policy.whitelistWrite('website.example')
+  expect((await host.connect(['message.write'])).value).toMatchObject({ ok: true })
+  const before = remote.tokens.length
+  expect((await host.call('mcp_connect', { domain: 'other.example', scopes: ['message.write'] })).value).toEqual({ ok: false, error: 'protocol_permission_denied' })
+  expect(remote.tokens).toHaveLength(before); expect(host.approvals).toHaveLength(0)
+})
+it('automatically connects a service with intent:read instead of the legacy configured scope name', async () => {
+  remote.advertisedScopes = ['intent:read', 'intent:write']
+  const host = await fixture(), connected = await host.connect()
+  expect(connected.value).toMatchObject({ ok: true, mode: 'one-shot-discovery', scopes: ['intent:read'] })
+  const value = connected.value as { operations: { name: string; operationRef: string }[] }
+  const operation = value.operations.find(item => item.name === 'identity_get')!
+  expect((await host.call('mcp_call_once', { operationRef: operation.operationRef, arguments: {} })).value).toMatchObject({ ok: true })
+  expect(host.approvals).toHaveLength(0); expect(remote.tokens.map(item => item.scope)).toEqual(['intent:read', 'intent:read'])
+  expect(remote.calls.filter(call => call.method === 'tools/call')).toHaveLength(1)
+})
+it('authenticates and invokes an MCP service whose protected resource is the bare HTTPS origin', async () => {
+  remote.resource = 'https://resource.example'
+  const host = await fixture(); host.policy.set('write', 'allow')
+  const connected = await host.connect(['message.write'])
+  expect(connected.value, JSON.stringify(connected.value)).toMatchObject({ ok: true, resource: remote.resource })
+  expect((await host.call('mcp_call_once', { operationRef: discoveredOperation(connected.value), arguments: { text: 'bare-origin RPC' } })).value).toMatchObject({ ok: true })
+  expect(remote.calls.filter(call => call.method === 'tools/call')).toHaveLength(1); expect(host.approvals).toHaveLength(0)
+})
+it('keeps authentication construction inside the admitted metadata context when read permission requires consent', async () => {
+  const host = await fixture(); host.policy.set('read', 'ask')
+  const connected = await host.connect()
+  expect(connected.value, JSON.stringify(connected.value)).toMatchObject({ ok: true, state: 'ready' })
+  expect(host.approvals).toHaveLength(1)
+  const value = connected.value as { serverName: string }
+  expect((await host.call(`mcp__${value.serverName}__identity_get`, {})).isError).not.toBe(true)
+  expect(host.approvals).toHaveLength(2); expect(remote.calls.filter(call => call.method === 'tools/call')).toHaveLength(1)
 })
 
 it('sends no elevated token or business request when the exact-write dialog is denied', async () => {
@@ -253,4 +308,30 @@ it('restores old one-shot bearer redaction from protected history after connecto
   expect(JSON.stringify(result)).not.toContain(remote.tokens[1]!.value)
   expect(remote.tokens.map(token => token.scope)).toEqual(['message.write', 'agent.self.read'])
   expect(host.approvals).toHaveLength(1)
+})
+it('redacts a retained bearer echoed by public discovery metadata, not only by business responses', async () => {
+  const host = await fixture()
+  expect((await host.connect(['message.write'])).value).toMatchObject({ ok: true })
+  const oldToken = remote.tokens[0]!.value
+  remote.advertisedScopes = ['agent.self.read', oldToken]
+  const next = await host.connect()
+  expect(next.value).toMatchObject({ ok: true })
+  expect(JSON.stringify(next)).not.toContain(oldToken)
+})
+
+it('fresh explicit reconnect adopts a changed Host default epoch without reviving old SDK calls', async () => {
+  const host = await fixture()
+  const first = await host.connect()
+  expect(first.value).toMatchObject({ ok: true, state: 'ready' })
+  const connected = first.value as { serverName: string }
+  const name = `mcp__${connected.serverName}__identity_get`
+  expect((await host.call(name, {})).isError).not.toBe(true)
+  const calls = remote.calls.filter(call => call.method === 'tools/call').length
+  host.changeDefaultEpoch()
+  expect((await host.call(name, {})).isError).toBe(true)
+  expect(remote.calls.filter(call => call.method === 'tools/call')).toHaveLength(calls)
+  expect((await host.connect()).value).toMatchObject({ ok: true, state: 'ready', serverName: connected.serverName })
+  expect((await host.call(name, {})).isError).not.toBe(true)
+  expect(remote.calls.filter(call => call.method === 'tools/call')).toHaveLength(calls + 1)
+  expect(host.approvals).toHaveLength(0)
 })

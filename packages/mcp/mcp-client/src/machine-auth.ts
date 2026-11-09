@@ -79,9 +79,9 @@ export class MachineAuthenticationSession {
         return Buffer.from(resolved.value, 'base64url')
       }))
       this.refreshTarget = async () => {
-        const publicSend: typeof machineFetch = (url, init = {}) => { if (this.closing) return Promise.reject(new Error('connection_disabled')); return send(url, { ...init, signal: AbortSignal.any([this.controller.signal, ...(init.signal ? [init.signal] : [])]) }) }
+        const publicSend: typeof machineFetch = (url, init) => { if (this.closing) return Promise.reject(new Error('connection_disabled')); return send(url, { ...init, signal: AbortSignal.any([this.controller.signal, ...(init?.signal ? [init.signal] : [])]) }) }
         const target = await discoverMachineTarget(endpoint, config.issuer, publicSend, config.discoveryCacheMs)
-        if (this.disposed || this.closing) throw new Error('connection_disabled')
+        this.assertOpen()
         this.assertRoute(target.resource)
         this.assertRoute(target.tokenEndpoint)
         const protocolIdentity = identityClient ?? identity?.bindProtocolConsumer(ctx)
@@ -92,7 +92,7 @@ export class MachineAuthenticationSession {
           await lease.assertActive()
           const client = await lease.getOAuthClientIdentity()
           this.redactor.registerIdentity(client.clientId)
-          if (client.algorithm !== 'ES256' || client.signerMode !== 'local') throw new Error('unsupported_machine_profile')
+          assertLocalMachineProfile(client)
           const partition = createHash('sha256').update(JSON.stringify([config.identityRef, client.clientId, client.keyId, client.version,
             target.issuer, target.resource, target.metadataDigest, [...new Set(config.requestedScopes)].sort(), config.mode, config.connectionId, lease.policyGeneration])).digest('hex')
           const requestedEnable = explicitEnable
@@ -101,17 +101,17 @@ export class MachineAuthenticationSession {
           const generation = requestedEnable
             ? await this.store.enable(requestedEnable.generation, partition, async () => {
               requestedEnable.authorize()
-              if (this.closing) throw new Error('connection_disabled')
+              this.assertOpen()
               await lease.assertActive()
               requestedEnable.authorize()
-              if (this.closing) throw new Error('connection_disabled')
+              this.assertOpen()
             }, this.enableOperationId)
             : await this.store.open(partition)
           explicitEnable = undefined
-          if (this.disposed || this.closing) throw new Error('connection_disabled')
+          this.assertOpen()
           await this.syncHistory()
           await lease.assertActive()
-          if (this.disposed || this.closing) throw new Error('connection_disabled')
+          this.assertOpen()
           const previous = this.binding
           this.tokenReady = false
           this.binding = Object.freeze({ target, lease, partition, generation })
@@ -131,11 +131,13 @@ export class MachineAuthenticationSession {
    * @returns Authorized response, or a sanitized protocol error.
    */
   readonly fetch = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
-    if (this.closing) throw new Error('connection_disabled')
+    this.assertOpen()
     const operation = this.dispatch(input, init)
     this.pending.add(operation)
     try { return await operation } finally { this.pending.delete(operation) }
   }
+  private assertOpen(): void { if (this.disposed || this.closing) throw new Error('connection_disabled') }
+  private bindingSnapshot(): Binding | undefined { return this.binding }
   private async currentBinding(): Promise<Binding> {
     await this.initialized
     await this.syncHistory()
@@ -144,19 +146,19 @@ export class MachineAuthenticationSession {
       this.refreshing ??= this.refreshTarget().finally(() => { this.refreshing = undefined })
       await this.refreshing
     }
-    const binding = this.binding
+    const binding = this.bindingSnapshot()
     if (!binding) throw new Error('connection_disabled')
     return binding
   }
   private async dispatch(input: string | URL | Request, init: RequestInit): Promise<Response> {
     const binding = await this.currentBinding()
     const request = new Request(input, init)
-    if (request.url !== binding.target.resource) throw new Error('resource_mismatch')
+    if (request.url !== new URL(binding.target.resource).href) throw new Error('resource_mismatch')
     if (request.headers.has('host') || request.headers.has('authorization') || request.headers.has('poppy-session') || request.headers.has('dpop')) throw new Error('managed_authentication_header')
     this.assertRoute(binding.target.resource)
     const token = await this.acquire(binding)
     await this.assertBinding(binding)
-    if (this.disposed || this.closing) throw new Error('connection_disabled')
+    this.assertOpen()
     await this.store.assertCurrent(binding.generation, binding.partition)
     request.headers.set('authorization', `Bearer ${token.token}`)
     this.redactor.remember(token.token, token.acquiredAt, token.expiresAt - token.acquiredAt)
@@ -241,7 +243,7 @@ export class MachineAuthenticationSession {
       void flight.finally(() => { if (flights.get(flightKey) === flight) flights.delete(flightKey) }).catch(() => {})
     }
     const acquired = await flight
-    if (this.disposed || this.closing) throw new Error('connection_disabled')
+    this.assertOpen()
     await this.assertBinding(binding)
     this.tokenReady = true
     this.tokenExpiresAt = acquired.expiresAt
@@ -296,7 +298,7 @@ export class MachineAuthenticationSession {
       || typeof value.token_type !== 'string' || value.token_type.toLowerCase() !== 'bearer' || value.refresh_token !== undefined
       || !Number.isSafeInteger(value.expires_in) || (value.expires_in as number) <= 0 || (value.expires_in as number) > 86400
       || value.scope !== undefined && typeof value.scope !== 'string') throw new Error('incompatible_token_response')
-    const granted = value.scope === undefined ? scopes : (value.scope as string).split(' ').filter(Boolean)
+    const granted = value.scope === undefined ? scopes : value.scope.split(' ').filter(Boolean)
     if (granted.some(scope => !scopes.includes(scope)) || scopes.some(scope => !granted.includes(scope))) throw new Error('insufficient_scope')
     const issueId = randomUUID()
     this.issuedSource = issueId
@@ -372,4 +374,9 @@ export class MachineAuthenticationSession {
       this.releaseConnectionOwner()
     }
   }
+}
+
+/** Validate the external provider contract even when its TypeScript declaration uses literals. */
+function assertLocalMachineProfile(client: { algorithm: unknown; signerMode: unknown }): void {
+  if (client.algorithm !== 'ES256' || client.signerMode !== 'local') throw new Error('unsupported_machine_profile')
 }

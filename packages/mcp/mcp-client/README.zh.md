@@ -181,15 +181,17 @@ SDK 通过旧版通知或现代协议订阅接收工具列表变化。监督器�
 <a id="domain-connector"></a>
 ## 域名连接器
 
-可选 Loader 入口 `@deepseek-ai/dsh-mcp-client/domain` 设置 `enabled: true` 后注册 `mcp_connect({domain, scopes?})`，不需要逐域名创建服务器配置。身份 Host 必须一次性启用全局 `domainAccess`，并允许这个实际安装的消费者。连接器从域名级资源元数据发现实际 MCP 地址，再验证资源自身和授权服务器元数据；当前支持 CIMD/ES256 客户端凭证认证，持久连接仅使用 Host 全局允许的读取 scope；额外 scope 走下方单次授权流程，不扩大原读取连接。不支持的发现或认证返回明确错误，不猜测 `/mcp`，不改走其他登录流程。连接复用现有 SDK、加密存储、断开和历史完整性检查，卸载时移除连接及工具。密钥保存在按连接隔离的 Host 凭据记录，不进入模型结果。`maxConnections` 默认 32，上限 128。原有显式服务器实例不变。一次性设置 `publicDirectHttps: true` 可授权此连接器独立使用公网 DNS 固定的 HTTPS 直连，不需要逐域名增加 `NO_PROXY`，也不改变模型流量的代理设置。
+可选 Loader 入口 `@deepseek-ai/dsh-mcp-client/domain` 启用 `enabled: true` 后注册 `mcp_connect({domain, scopes?})`，`maxConnections` 默认 32。需要匹配的 Identity Host 策略 API 和一次全局域名接入，不需要逐域名配置。发现经公网 DNS 固定的 HTTPS 验证资源、AS 及 CIMD/ES256。未显式提供 scopes 时选择唯一的服务端读取 scope，也支持 `intent:read`；有歧义返回 `scope_selection_required`、`availableScopes`，不申请全部 scope。原 Host 读取 scope 可建立持久连接；其他 scope 使用隔离 Session，不扩大原连接。连接 ID 包含原始发现源，防止别名借用域名许可。保留密文、受保护密钥、断开和历史检查。`publicDirectHttps: true` 是仅此连接器使用、独立于环境代理的直连选项。原显式服务器不自动采用此规则。
 
-### 单次操作确认
+### 统一权限与单次执行
 
-域名业务工具只有明确声明 `readOnlyHint: true` 且 `destructiveHint: false` 时才不重复弹窗。缺失或冲突的提示必须由用户确认，不根据 `get`、`list` 等名称猜测安全性。其他调用自动打开公共身份授权弹窗，把资源地址、原始工具名、规范化参数和 scopes 绑定到一次执行。拒绝、超时、取消或卸载不会授权发送，永久授权不能替代此流程。传输层在 DNS、token 和请求体准备完成后再次检查许可，并限制为最多一次、工具名及参数完全匹配的物理 `tools/call`；不重放结果不确定的调用。
+Identity 的“协议管理”控制读写和精确域名白名单，分别检查工具语义和凭据 scope 权限。只读必须明确声明 `readOnlyHint: true`、`destructiveHint: false`，不根据名称或 POST 传输判断。允许直接执行，询问自动打开本次确认，禁止不发送业务请求。未知／冲突效果、明确支付和未知／额外 scope，即使全写允许仍单独确认。规则修改、默认身份变化、既有拒绝、取消及卸载使旧准入失效。认证构建、SDK 初始化及清理都在已批准上下文内；DNS、token 和正文准备后再复查，最多发送一次精确 `tools/call`，不重放未知结果。
 
-`mcp_connect({domain, scopes})` 请求超出全局读取策略、但站点已公布的 scopes 时，先弹出仅用于发现工具的授权对话框，返回 opaque `operationRef`，不改变读取连接。随后 `mcp_call_once({operationRef, arguments})` 再请求一次针对具体操作的确认，并使用新的 SDK Session。元数据许可不能调用业务工具或读取额外资源。高权限 Session 不注册工具，会尝试终止 Session 和撤销 token，不被其他审批复用。返回的 `credentialRevocation` 如实区分已确认与未确认的远端撤销。
+返回 `one-shot-discovery` 时，将 opaque 操作引用交给 `mcp_call_once`。历史工具名表示一次 SDK 生命周期，不代表必然弹窗；每次仍检查保存的规则。元数据许可不能执行业务工具或读取额外资源。临时原生 signer 仅限指定资源、issuer、非空 scope 集和当前执行，释放不会清除持续设置。隔离 Session 不注册工具，释放能力前终止 Session 并尝试撤销 token，`credentialRevocation` 区分已确认与未确认撤销。缺少 Host 策略 API 时返回 `protocol_policy_required`，并失败关闭。
 
 单次连接状态保持加密，密钥保存在 Host 受保护凭据记录中；本地断开后仍保留已发送 bearer 的历史。域名级 redactor 在后续模型输出前恢复历史，跨重启也生效；密钥缺失或历史损坏时拒绝继续。自动清理历史暂不实现，`maxOneShotRecords` 默认 512、上限 4096，达到上限就拒绝进一步获取凭据，不丢弃仍相关的历史。用户确认等待 `approvalWaitMs` 默认 120000 ms，轮询 `approvalPollMs` 默认 1000 ms，单次 SDK 阶段预算 `oneShotTimeoutMs` 默认 60000 ms，发现操作有效期 `operationRefTtlMs` 默认 300000 ms，实时引用上限 `maxDiscoveredOperations` 默认 256。引用过期或操作声明变更后必须重新发现。原显式服务器实例不会隐式切换到这套域名策略。
+
+Identity 管理器通过 `protocol_permissions`、`identity_settings` 让 Agent 在所有者确认后修改共享配置。默认身份准入版本变化后，新的显式域名连接会关闭旧 SDK／工具，并替换该连接拥有的资源和提示贡献；旧请求仍受边界约束。持久断开、无法读取或已隔离的凭据历史仍阻止自动重新启用。
 
 <a id="model-experience"></a>
 ## 模型体验

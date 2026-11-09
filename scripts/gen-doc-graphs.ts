@@ -713,6 +713,14 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Reconciles mcp-client instances against its volatile servers configuration, aggregates their connection statuses, and serves restart and probe to management surfaces.',
   },
   {
+    key: 'mcpConnections',
+    pkg: 'mcp-client',
+    title: 'Host machine-connection owner registry',
+    mode: 'core',
+    consumers: ['mcp-client'],
+    note: 'Binds installed owner integrations to connection lifecycle controls without exposing management capabilities to model tools.',
+  },
+  {
     key: 'schedule',
     pkg: 'schedule',
     title: 'Host scheduled messages',

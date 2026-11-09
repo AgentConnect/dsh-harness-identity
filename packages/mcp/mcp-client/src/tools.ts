@@ -29,7 +29,7 @@ import { describeError, McpLocalError } from './diagnostic.ts'
 /** Advertised MCP tool fields used by a Host-owned operation policy. */
 export interface McpConsentTool {
   name: string
-  annotations?: { readOnlyHint?: boolean | undefined; destructiveHint?: boolean | undefined } | undefined
+  annotations?: { readOnlyHint?: boolean | undefined; destructiveHint?: boolean | undefined; paymentHint?: boolean | undefined } | undefined
 }
 /** Exact logical call and the current SDK invocation, captured before any consent wait. */
 export interface McpToolCall {
