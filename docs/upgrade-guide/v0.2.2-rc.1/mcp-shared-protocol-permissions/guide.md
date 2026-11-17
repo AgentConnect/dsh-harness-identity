@@ -11,6 +11,8 @@ English | [中文](guide.zh.md)
 
 The optional domain connector requires matching Identity Host policy methods; older Hosts return `protocol_policy_required`. Read/write and domain rules control execution, rather than a fixed `protocol.read` name. Omitted scopes select one unambiguous advertised read scope. `mcp_call_once` still uses one isolated SDK lifetime but may run without another dialog when the saved rule allows it. Unknown effects, payments and extra privileges still require confirmation.
 
+The connector requires confirmation for business tools from origins whose annotations the Host has not explicitly trusted. Configure `trustedToolAnnotationOrigins` with exact HTTPS resource origins if existing verified servers should retain annotation-based admission. Existing deny rules still apply.
+
 Connection ids include the original discovery origin. Old encrypted records and keys remain untouched; aliases do not share connections merely because they discover the same endpoint. Explicitly configured MCP servers remain outside the domain policy unless their integration supplies the required checks.
 
 A saved default identity change advances its admission epoch. Reconnect explicitly to adopt it; old in-flight operations cannot switch identity. The Identity manager also offers Agent configuration tools with one persistent-change confirmation. Disconnect and credential-history fences still apply.

@@ -11,6 +11,8 @@ description: "域名 MCP 需要共享 Identity 策略 API，连接 ID 绑定原�
 
 可选域名连接器需要匹配的 Identity Host 策略方法，旧 Host 返回 `protocol_policy_required`。执行由读写和域名规则控制，不依赖固定 `protocol.read` 名称；省略 scopes 时选择唯一的服务端读取 scope。`mcp_call_once` 仍使用一次隔离 SDK 生命周期，但保存规则允许时不重复弹窗。未知效果、支付和额外权限仍单独确认。
 
+对于尚未明确受信的资源 Origin，连接器会要求所有者确认业务工具调用。若已有经核验的服务应继续以工具注解决定准入，请将其精确 HTTPS 资源 Origin 加入 `trustedToolAnnotationOrigins`。已有拒绝规则仍然生效。
+
 连接 ID 包含原始发现源。旧加密记录和密钥不变，别名不会仅因发现相同地址而共享连接。原显式 MCP 服务器不自动受域名规则管理，除非其集成提供相应检查。
 
 保存默认身份会推进准入版本。请显式重新连接后采用新版本；在途请求不能切换身份。Identity 管理器同时提供 Agent 配置工具，持久修改在会话内确认一次。持久断开和凭据历史边界仍然有效。

@@ -44,10 +44,10 @@ it.skipIf(!upstream)('opens active state, preserves closed old states, and rolls
     expect(request.headers.get('authorization')).toBe('Bearer current-fixture-token')
     return Response.json({ ok: true })
   })
-  const session = (connectionId: string, stateRoot: string) => new MachineAuthenticationSession(context, {
+  const session = (connectionId: string, stateRoot: string, signal = abort.signal) => new MachineAuthenticationSession(context, {
     mode: 'cimd-client-credentials', connectionId, provider: 'credentials', credentialRef: 'MCP_SIGNER',
     credential: { issuer, resource, clientId, keyId: 'fixture' }, stateRoot, encryptionKeyRef: 'MCP_KEY', requestedScopes: ['catalog.read'],
-  }, resource, abort.signal, send)
+  }, resource, signal, send)
   const seed = async (id: string, dir: string) => {
     const store = new MachineConnectionStore(dir, id, async () => storageKey())
     const generation = await store.open('old-partition')
@@ -61,7 +61,10 @@ it.skipIf(!upstream)('opens active state, preserves closed old states, and rolls
   try {
     const activeDir = join(root, 'active')
     const active = await seed('same-connection', activeDir)
-    expect(await (await session('same-connection', activeDir).fetch(resource)).json()).toEqual({ ok: true })
+    const activeAbort = new AbortController()
+    try {
+      expect(await (await session('same-connection', activeDir, activeAbort.signal).fetch(resource)).json()).toEqual({ ok: true })
+    } finally { activeAbort.abort() }
     expect((await active.sentHistory()).map(record => record.value)).toEqual(['old-fixture-token', 'current-fixture-token'])
     const returned = await active.open('old-partition')
     expect(await active.token(returned, 'old-partition')).toBeUndefined()
