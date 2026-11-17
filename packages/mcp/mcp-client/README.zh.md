@@ -305,6 +305,20 @@ Bearer 记录、完整性与迁移资格共用强制认证 envelope，fresh 空 
 
 Schema 2 保留旧版启用状态、generation 和 ciphertext，并把未知历史标为不完整。连接仍公开 historyState 与 migrationId，但 SDK/工具保持停止。解密 key 缺失不会生成新 master 或擦旧 ciphertext；换 connectionId/stateRoot 或只撤销最新 Token 不证明完整历史。Host management 的 legacyRecovery 数组默认空，仅受信运维配置可提供精确 connectionId/migrationId、封闭 kind 和 evidenceRef；Remote 仍只收 connectionId。prior-bearers-invalidated 表示运维证明所有早前 Token 已失效，不是 SDK 验证。old-writers-stopped 还要求该事实之后完整 86431 秒单调隔离，再明确 enable；重建 Host 保守重算隔离。恢复不会隐式启用已禁用连接。
 
+### 机器连接回退验证
+
+回退用例使用 AgentConnect Host 运行时和 MCP 客户端 `0.2.2-rc.1`，以及 官方 CIMD 候选和 MCP 客户端 `0.2.2-rc.3`。两份 profile 均由用例生成 `cordis.yml`。原 profile 加载 AgentConnect 机器客户端及 Host 管理服务。迁移 profile 加载官方机器客户端和内置 `credentials` 签名器。待恢复状态由 `DSH_CIMD_LEGACY_WRITER_SHA` 指定的 schema 1 写入器生成。
+
+使用回退交付中记录的写入器 SHA 和官方候选构建，再从 AgentConnect checkout 执行。
+
+```bash
+DSH_CIMD_LEGACY_WRITER_SHA="$legacy_writer_sha" \
+DSH_CIMD_UPSTREAM_SOURCE=/absolute/path/to/built-official-candidate \
+  pnpm exec vitest run packages/mcp/mcp-client/tests/machine-management.spec.ts -t 'boots the old profile'
+```
+
+用例停止当前 Host 后才启动下一端，复用连接 ID、加密状态和密钥。回退后验证启用连接可调用工具并读取保留的 Bearer 历史，禁用和待恢复连接均可查询且网络请求为零。
+
 
 ### 工具命名与共存
 

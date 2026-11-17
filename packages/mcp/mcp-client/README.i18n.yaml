@@ -107,6 +107,9 @@
 /deepseek-ai-dsh-mcp-client/known-limitations-and-deferred-work/cimd-machine-authentication:
   en: 98727a7d85120926
   zh: 2b6d22e32085167a
+/deepseek-ai-dsh-mcp-client/known-limitations-and-deferred-work/machine-connection-rollback-verification:
+  en: 22cc55d283289179
+  zh: 5080604647516623
 /deepseek-ai-dsh-mcp-client/known-limitations-and-deferred-work/tool-naming-and-coexistence:
   en: 2a18b4e7a7293015
   zh: 2350ee09abfcec1b

@@ -151,7 +151,8 @@ it.skipIf(!process.env.DSH_CIMD_UPSTREAM_SOURCE)('boots the old profile before a
   const execute = promisify(execFile)
   const root = await mkdtemp(join(tmpdir(), 'cimd-host-rollback-')); roots.push(root)
   const fixture = fileURLToPath(new URL('fixtures/cimd-rollback-host.mjs', import.meta.url))
-  const legacySha = '4c822ba40bab6eefc8c4ccc498784b386b355e84'
+  const legacySha = process.env.DSH_CIMD_LEGACY_WRITER_SHA ?? ''
+  if (!/^[a-f0-9]{40}$/u.test(legacySha)) throw new Error('Set DSH_CIMD_LEGACY_WRITER_SHA to the full schema 1 writer commit SHA')
   for (const state of ['ready', 'disconnected', 'blocked']) {
     const stateRoot = join(root, state)
     if (state === 'blocked') {

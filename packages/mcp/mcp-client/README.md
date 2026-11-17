@@ -304,6 +304,20 @@ Bearer records, completeness and migration qualifications share a mandatory auth
 
 Schema 2 retains legacy enablement, generation and ciphertext but marks unknown prior history incomplete. Such a connection remains visible with historyState and migrationId while SDK/tools stay stopped. Missing decryption keys do not create a replacement master or erase old ciphertext. Changing connectionId/stateRoot or revoking only the latest Token does not establish complete history. The Host management legacyRecovery array defaults to empty and accepts exact connectionId/migrationId, a closed kind and evidenceRef only from trusted operator configuration; Remote requests still contain only connectionId. prior-bearers-invalidated records an operator’s evidence covering all earlier Tokens, not an SDK verification. old-writers-stopped requires that evidence plus 86431 seconds of monotonic isolation before a later explicit enable; reconstructing the Host restarts that conservative interval. Recovery never implicitly enables a disabled connection.
 
+### Machine connection rollback verification
+
+The rollback regression uses the AgentConnect Host runtime with MCP client `0.2.2-rc.1`, and the official CIMD candidate with MCP client `0.2.2-rc.3`. Both profiles are generated as `cordis.yml` in the test. The original profile loads the AgentConnect machine client and Host management service. The migration profile loads the official machine client with the built-in `credentials` signer. The pending state starts with the schema 1 writer identified by `DSH_CIMD_LEGACY_WRITER_SHA`.
+
+Set the writer SHA and build the official candidate identified in the rollback handoff. Run the following command from the AgentConnect checkout.
+
+```bash
+DSH_CIMD_LEGACY_WRITER_SHA="$legacy_writer_sha" \
+DSH_CIMD_UPSTREAM_SOURCE=/absolute/path/to/built-official-candidate \
+  pnpm exec vitest run packages/mcp/mcp-client/tests/machine-management.spec.ts -t 'boots the old profile'
+```
+
+The test stops each Host before starting the next. It reuses the connection ID, encrypted state and key, verifies a tool call and retained bearer history after rollback, and checks that disabled and pending-recovery connections remain queryable with zero network attempts.
+
 
 ### Tool naming and coexistence
 
