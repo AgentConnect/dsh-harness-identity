@@ -25,8 +25,8 @@ const hook = registerHooks({
 let requests = 0
 let tokens = 0
 globalThis.cimdRollbackFixture = async (input, init, beforeSend) => {
-  await beforeSend?.()
   requests++
+  await beforeSend?.()
   const request = new Request(input, init)
   if (request.url === 'https://resource.example/prm') return Response.json({ resource: endpoint, authorization_servers: [issuer] })
   if (request.url === `${issuer}/.well-known/oauth-authorization-server`) return Response.json({

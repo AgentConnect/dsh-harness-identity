@@ -27,7 +27,7 @@ import type { MachineConnectionStatus } from '../src/management-types.ts'
 import { MachineConnectionStore } from '../src/machine-store.ts'
 
 const remoteName = '@deepseek-ai/dsh-mcp-client/management-remote'
-const f = vi.hoisted(() => ({ tokens: 0, requests: 0, revocations: 0, leases: 0,
+const f = vi.hoisted(() => ({ tokens: 0, requests: 0, networkCalls: 0, revocations: 0, leases: 0,
   permitted: true, echo: false, echoName: false, echoError: false, failInit: false,
   history: [] as string[], assertions: [] as string[], echoProof: false,
   proofSigner: undefined as (() => string) | undefined, proofVerifier: undefined as ((value: string) => boolean) | undefined,
@@ -38,6 +38,7 @@ const f = vi.hoisted(() => ({ tokens: 0, requests: 0, revocations: 0, leases: 0,
 vi.mock('../src/machine-http.ts', async (original) => {
   const value = await original<typeof import('../src/machine-http.ts')>()
   return { ...value, machineFetch: async (input: string | URL | Request, init?: RequestInit) => {
+    f.networkCalls++
     const req = new Request(input, init)
     const json = (data: unknown) => new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } })
     if (req.url.includes('oauth-protected-resource')) return json({ resource: 'https://resource.example/mcp', authorization_servers: ['https://auth.example'] })
@@ -88,7 +89,7 @@ afterEach(async () => {
   await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose()))
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))))
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
-  Object.assign(f, { tokens: 0, requests: 0, revocations: 0, leases: 0, permitted: true,
+  Object.assign(f, { tokens: 0, requests: 0, networkCalls: 0, revocations: 0, leases: 0, permitted: true,
     echo: false, echoName: false, echoError: false, failInit: false, history: [],
     holdTool: undefined, holdIdentity: undefined, holdToken: undefined, assertions: [], echoProof: false,
     proofSigner: undefined, proofVerifier: undefined, leaseHook: undefined, toolReturned: false,
@@ -166,7 +167,7 @@ it.skipIf(!process.env.DSH_CIMD_UPSTREAM_SOURCE)('boots the old profile before a
       await new Writer(stateRoot, 'managed', async () => Buffer.alloc(32, 29)).open('historical-partition')
       await unlink(join(stateRoot, createHash('sha256').update('managed').digest('hex') + '.json.lock'))
     }
-    const beforeFirst = f.requests + f.tokens
+    const beforeFirst = f.networkCalls
     const first = await boot(true, stateRoot)
     await first.machine.fiber!.await()
     const manager = first.ctx.get('mcpConnections')!.bindManager(first.manager.fiber!.ctx)
@@ -174,13 +175,13 @@ it.skipIf(!process.env.DSH_CIMD_UPSTREAM_SOURCE)('boots the old profile before a
     expect(await manager.status('managed')).toMatchObject({ state })
     if (state === 'blocked') {
       expect(await manager.status('managed')).toMatchObject({ historyState: 'migration_required' })
-      expect(f.requests + f.tokens).toBe(beforeFirst)
+      expect(f.networkCalls).toBe(beforeFirst)
     }
     await first.ctx.fiber.dispose()
     const { stdout } = await execute(process.execPath, [fixture, process.env.DSH_CIMD_UPSTREAM_SOURCE!, stateRoot, state])
     expect(stdout).toContain('candidate-host-verified')
 
-    const before = f.requests + f.tokens
+    const before = f.networkCalls
     const rolledBack = await boot(true, stateRoot)
     await rolledBack.machine.fiber!.await()
     const rollbackManager = rolledBack.ctx.get('mcpConnections')!.bindManager(rolledBack.manager.fiber!.ctx)
@@ -192,7 +193,7 @@ it.skipIf(!process.env.DSH_CIMD_UPSTREAM_SOURCE)('boots the old profile before a
       expect((await rolledBack.store.sentHistory()).some(record => record.value === 'candidate-fixture-token')).toBe(true)
     } else {
       if (state === 'blocked') expect(await rollbackManager.status('managed')).toMatchObject({ historyState: 'migration_required' })
-      expect(f.requests + f.tokens).toBe(before)
+      expect(f.networkCalls).toBe(before)
     }
     await rolledBack.ctx.fiber.dispose()
   }
