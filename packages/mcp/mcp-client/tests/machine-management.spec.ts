@@ -1,12 +1,14 @@
 import { executeToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 /** Real Loader, authenticated user carrier, Typert and SDK lifecycle; remote identity/AS are fixtures. */
 import { createServer } from 'node:http'
-import { generateKeyPairSync, randomBytes, sign, verify } from 'node:crypto'
+import { createHash, generateKeyPairSync, randomBytes, sign, verify } from 'node:crypto'
+import { execFile } from 'node:child_process'
 import type { AddressInfo } from 'node:net'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { afterEach, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -92,8 +94,9 @@ afterEach(async () => {
     proofSigner: undefined, proofVerifier: undefined, leaseHook: undefined, toolReturned: false,
     failList: false, foreignError: '', holdSdkError: undefined })
 })
-async function boot(allowed = true) {
+async function boot(allowed = true, stateRoot?: string) {
   const root = await mkdtemp(join(tmpdir(), 'mcp-managed-host-')); roots.push(root)
+  stateRoot ??= join(root, 'state')
   const ctx = new Context(); contexts.push(ctx)
   const routes: WebRoute[] = []
   ctx.provide('webServer', { port: 0, tapIndex: () => () => {}, register(route: WebRoute) {
@@ -118,7 +121,7 @@ async function boot(allowed = true) {
     } }) } as never)
   } }
   const config = join(root, 'cordis.yml')
-  await writeFile(config, `- name: '@fixture/host'\n- name: '@deepseek-ai/dsh-system-prompt'\n- name: '@deepseek-ai/dsh-tools'\n- name: '@deepseek-ai/dsh-typert-registry'\n- name: '@deepseek-ai/dsh-client-connection'\n- name: '@deepseek-ai/dsh-api-gateway'\n- name: '@deepseek-ai/dsh-mcp-client/management'\n  config:\n    managerConsumers: ${allowed ? `[${JSON.stringify(remoteName)}]` : '[]'}\n- id: manager\n  name: '${remoteName}'\n- id: machine\n  name: '@deepseek-ai/dsh-mcp-client'\n  inject: [mcpConnections, anpIdentity, credentials]\n  config:\n    serverName: managed\n    transport: streamable-http\n    url: https://resource.example/mcp\n    failOnStartupError: true\n    reconnect: { enabled: false }\n    authentication:\n      mode: cimd-client-credentials\n      connectionId: managed\n      identityRef: { storeId: store, identityId: identity, did: 'did:web:identity.example' }\n      policyRef: approved\n      requestedScopes: [agent.self.read]\n      stateRoot: ${JSON.stringify(join(root, 'state'))}\n      encryptionKeyRef: MCP_KEY\n`)
+  await writeFile(config, `- name: '@fixture/host'\n- name: '@deepseek-ai/dsh-system-prompt'\n- name: '@deepseek-ai/dsh-tools'\n- name: '@deepseek-ai/dsh-typert-registry'\n- name: '@deepseek-ai/dsh-client-connection'\n- name: '@deepseek-ai/dsh-api-gateway'\n- name: '@deepseek-ai/dsh-mcp-client/management'\n  config:\n    managerConsumers: ${allowed ? `[${JSON.stringify(remoteName)}]` : '[]'}\n- id: manager\n  name: '${remoteName}'\n- id: machine\n  name: '@deepseek-ai/dsh-mcp-client'\n  inject: [mcpConnections, anpIdentity, credentials]\n  config:\n    serverName: managed\n    transport: streamable-http\n    url: https://resource.example/mcp\n    failOnStartupError: true\n    reconnect: { enabled: false }\n    authentication:\n      mode: cimd-client-credentials\n      connectionId: managed\n      identityRef: { storeId: store, identityId: identity, did: 'did:web:identity.example' }\n      policyRef: approved\n      requestedScopes: [agent.self.read]\n      stateRoot: ${JSON.stringify(stateRoot)}\n      encryptionKeyRef: MCP_KEY\n`)
   const modules = new Map<string, unknown>([['@fixture/host', host], ['@deepseek-ai/dsh-system-prompt', SystemPrompt], ['@deepseek-ai/dsh-tools', Tools], ['@deepseek-ai/dsh-typert-registry', TypertRegistry], ['@deepseek-ai/dsh-client-connection', Connection], ['@deepseek-ai/dsh-api-gateway', Gateway], ['@deepseek-ai/dsh-mcp-client/management', Management], [remoteName, ManagementRemote], ['@deepseek-ai/dsh-mcp-client', McpClient]])
   ctx.baseUrl = pathToFileURL(root).href + '/'; await ctx.plugin(Loader); ctx.loader.builtins.include = Include
   ctx.loader.internal = { version: 'v2', import: async (name: string) => { if (!modules.has(name)) throw new Error('unknown_fixture_module'); return modules.get(name) } } as never
@@ -139,9 +142,61 @@ async function boot(allowed = true) {
     if (result.status !== 200) return { status: result.status }
     return (await result.json() as { result: { ok: boolean; value?: MachineConnectionStatus; error?: unknown } }).result
   }
-  return { ctx, call, entry, store: new MachineConnectionStore(join(root, 'state'), 'managed', async () => Buffer.alloc(32, 29)),
+  return { ctx, call, entry, store: new MachineConnectionStore(stateRoot, 'managed', async () => Buffer.alloc(32, 29)),
     machine: [...ctx.loader.entries()].find(value => value.options.id === 'machine')!, manager: [...ctx.loader.entries()].find(value => value.options.id === 'manager')! }
 }
+
+it.skipIf(!process.env.DSH_CIMD_UPSTREAM_SOURCE)('boots the old profile before and after the official candidate uses the same state', async () => {
+  const execute = promisify(execFile)
+  const root = await mkdtemp(join(tmpdir(), 'cimd-host-rollback-')); roots.push(root)
+  const fixture = fileURLToPath(new URL('fixtures/cimd-rollback-host.mjs', import.meta.url))
+  const legacySha = '4c822ba40bab6eefc8c4ccc498784b386b355e84'
+  for (const state of ['ready', 'disconnected', 'blocked']) {
+    const stateRoot = join(root, state)
+    if (state === 'blocked') {
+      await mkdir(stateRoot, { recursive: true, mode: 0o700 })
+      const { stdout } = await execute('git', ['show', `${legacySha}:packages/mcp/mcp-client/src/machine-store.ts`])
+      const dependency = pathToFileURL(join(process.env.DSH_CIMD_UPSTREAM_SOURCE!, 'packages/subprocess/subprocess/lib/index.js')).href
+      const oldSource = stdout.replace("from '@deepseek-ai/dsh-subprocess'", `from ${JSON.stringify(dependency)}`)
+      const writer = join(root, 'historical-writer.ts')
+      await writeFile(writer, oldSource, { mode: 0o600 })
+      const { MachineConnectionStore: Writer } = await import(/* @vite-ignore */ pathToFileURL(writer).href) as {
+        MachineConnectionStore: new (root: string, id: string, key: () => Promise<Buffer>) => Pick<MachineConnectionStore, 'open'>
+      }
+      await new Writer(stateRoot, 'managed', async () => Buffer.alloc(32, 29)).open('historical-partition')
+      await unlink(join(stateRoot, createHash('sha256').update('managed').digest('hex') + '.json.lock'))
+    }
+    const beforeFirst = f.requests + f.tokens
+    const first = await boot(true, stateRoot)
+    await first.machine.fiber!.await()
+    const manager = first.ctx.get('mcpConnections')!.bindManager(first.manager.fiber!.ctx)
+    if (state === 'disconnected') expect(await manager.disconnect('managed')).toMatchObject({ state })
+    expect(await manager.status('managed')).toMatchObject({ state })
+    if (state === 'blocked') {
+      expect(await manager.status('managed')).toMatchObject({ historyState: 'migration_required' })
+      expect(f.requests + f.tokens).toBe(beforeFirst)
+    }
+    await first.ctx.fiber.dispose()
+    const { stdout } = await execute(process.execPath, [fixture, process.env.DSH_CIMD_UPSTREAM_SOURCE!, stateRoot, state])
+    expect(stdout).toContain('candidate-host-verified')
+
+    const before = f.requests + f.tokens
+    const rolledBack = await boot(true, stateRoot)
+    await rolledBack.machine.fiber!.await()
+    const rollbackManager = rolledBack.ctx.get('mcpConnections')!.bindManager(rolledBack.manager.fiber!.ctx)
+    expect(await rollbackManager.status('managed')).toMatchObject({ state })
+    if (state === 'ready') {
+      const result = await executeToolFixture(rolledBack.ctx, { name: 'mcp__managed__identity_get', arguments: {},
+        callId: ToolCallId('rollback'), signal: new AbortController().signal })
+      expect(result.isError).toBe(false)
+      expect((await rolledBack.store.sentHistory()).some(record => record.value === 'candidate-fixture-token')).toBe(true)
+    } else {
+      if (state === 'blocked') expect(await rollbackManager.status('managed')).toMatchObject({ historyState: 'migration_required' })
+      expect(f.requests + f.tokens).toBe(before)
+    }
+    await rolledBack.ctx.fiber.dispose()
+  }
+}, 30000)
 
 it.each([true, false])('revalidates expired discovery before a tool call while retaining permission checks (%s)', async (permitted) => {
   const b = await boot()
