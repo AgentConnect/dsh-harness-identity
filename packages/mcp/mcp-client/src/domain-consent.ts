@@ -42,6 +42,8 @@ export interface McpDomainConsentOptions {
   resource: string
   issuer?: string
   scopes: string[]
+  /** Host trust for annotations received from this exact resource origin. */
+  trustToolAnnotations?: boolean
   approvalWaitMs: number
   approvalPollMs: number
   signal: AbortSignal
@@ -61,6 +63,19 @@ interface WireCall {
 }
 const PROTOCOL_METHODS = new Set(['initialize','server/discover','notifications/initialized','tools/list','ping','notifications/cancelled'])
 const METADATA_METHODS = new Set(['initialize', 'server/discover', 'notifications/initialized', 'tools/list', 'resources/list', 'resources/templates/list', 'resources/read', 'ping', 'notifications/cancelled'])
+
+function isSdkToolEnvelope(value: unknown, version: string | null): boolean {
+  if (value === undefined) return version !== '2026-07-28'
+  if (version !== '2026-07-28' || !value || typeof value !== 'object' || Array.isArray(value)) return false
+  const meta = value as Record<string, unknown>
+  const protocolVersion = 'io.modelcontextprotocol/protocolVersion'
+  const clientCapabilities = 'io.modelcontextprotocol/clientCapabilities'
+  const clientInfo = 'io.modelcontextprotocol/clientInfo'
+  return Object.keys(meta).every(key => key === protocolVersion || key === clientCapabilities || key === clientInfo)
+    && meta[protocolVersion] === version && isDeepStrictEqual(meta[clientCapabilities], {})
+    && (isDeepStrictEqual(meta[clientInfo], { name: 'dsh-mcp-client', version: '0.0.1' })
+      || isDeepStrictEqual(meta[clientInfo], { name: 'dsh-mcp-client-once', version: '0.0.1' }))
+}
 
 /** Logical consent excludes only transport-generated JSON-RPC ids and session headers.
  * @param resource - Exact discovered resource.
@@ -106,7 +121,7 @@ export class McpDomainConsent {
    * @returns Whether the current read-scoped connection may invoke it without another dialog.
    */
   automaticRead(tool: McpConsentTool): boolean {
-    return this.options.policy.classifyMcp(tool.annotations).effect === 'read'
+    return this.options.trustToolAnnotations === true && this.options.policy.classifyMcp(tool.annotations).effect === 'read'
   }
 
   /** Invoke through the current SDK only after the exact owner policy admits it. */
@@ -136,7 +151,8 @@ export class McpDomainConsent {
     combined.throwIfAborted()
     const request = mcpConsentRequest(this.options.resource, this.options.scopes, tool, args, this.options.issuer)
     const metadataOnly = tool === '__mcp_tools_list__'
-    const policy = await this.admission(metadataOnly, annotations)
+    const trustedAnnotations = this.options.trustToolAnnotations ? annotations : undefined
+    const policy = await this.admission(metadataOnly, trustedAnnotations)
     if (policy.decision === 'deny') throw new McpDomainConsentError('protocol_permission_denied')
     const assertPolicy = async () => {
       combined.throwIfAborted()
@@ -151,7 +167,8 @@ export class McpDomainConsent {
       await check(); const result = await effect(check, capabilities); await check(); return result
     }
     if (policy.decision === 'allow') return this.options.consent.executeAllowed(request.clone(), {
-      target: this.options.target, policyVersion: policy.version, metadataOnly, ...(annotations === undefined ? {} : { annotations }),
+      target: this.options.target, policyVersion: policy.version, metadataOnly,
+      ...(trustedAnnotations === undefined ? {} : { annotations: trustedAnnotations }),
     }, run)
     let decision = await this.options.consent.request({ requestId: `mcp-once-${randomUUID()}`, purpose: `MCP ${tool}; exact operation approval; policy ${policy.version}`, request: request.clone() })
     const deadline = Date.now() + this.options.approvalWaitMs
@@ -220,7 +237,8 @@ export class McpDomainConsent {
         if (!current || current.metadataOnly || !('params' in message) || !message.params || typeof message.params !== 'object' || Array.isArray(message.params)) throw new McpDomainConsentError('unapproved_mcp_operation')
         const params = message.params
         if (Object.keys(message).some(key => !['jsonrpc','id','method','params'].includes(key))
-          || Object.keys(params).some(key => !['name','arguments'].includes(key))
+          || Object.keys(params).some(key => !['name','arguments','_meta'].includes(key))
+          || !isSdkToolEnvelope('_meta' in params ? params._meta : undefined, request.headers.get('mcp-protocol-version'))
           || !('name' in params) || params.name !== current.tool || !('arguments' in params) || !isDeepStrictEqual(params.arguments, current.args)) throw new McpDomainConsentError('operation_mismatch')
       } else if (!(current ? PROTOCOL_METHODS : METADATA_METHODS).has(message.method)) throw new McpDomainConsentError('unapproved_mcp_request')
     }

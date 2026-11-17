@@ -20,6 +20,7 @@ import { domainPolicyFixture } from './fixtures/domain-policy.ts'
 
 const remote = vi.hoisted(() => ({
   resource: 'https://resource.example/mcp',
+  modern: false,
   advertisedScopes: ['agent.self.read', 'message.write'],
   tokens: [] as Array<{ value: string; scope: string }>,
   calls: [] as Array<{ token: string; method: string; params?: { name: string; arguments: Record<string, unknown> } }>,
@@ -54,9 +55,12 @@ vi.mock('../src/machine-http.ts', async (importOriginal) => {
     if (request.method === 'DELETE') { remote.closed.push(token.value); return new Response(null, { status: 200 }) }
     const body = await request.json() as { id?: number; method: string; params?: { name: string; arguments: Record<string, unknown> } }
     remote.calls.push({ token: token.value, method: body.method, ...(body.params ? { params: body.params } : {}) })
-    const result = (value: unknown) => json({ jsonrpc: '2.0', id: body.id, result: value })
+    const result = (value: object) => json({ jsonrpc: '2.0', id: body.id,
+      result: remote.modern ? { resultType: 'complete', ttlMs: 0, cacheScope: 'private', ...value } : value })
     switch (body.method) {
-      case 'server/discover': return json({ jsonrpc: '2.0', id: body.id, error: { code: -32601, message: 'Method not found' } })
+      case 'server/discover': return remote.modern
+        ? result({ resultType: 'complete', supportedVersions: ['2026-07-28'], capabilities: { tools: {} } })
+        : json({ jsonrpc: '2.0', id: body.id, error: { code: -32601, message: 'Method not found' } })
       case 'initialize': return json({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'once-fixture', version: '1' } } }, { 'mcp-session-id': `session-${token.value}` })
       case 'notifications/initialized': return new Response(null, { status: 202 })
       case 'tools/list': return result({ tools: [
@@ -79,13 +83,15 @@ afterEach(async () => {
   remote.tokens.splice(0); remote.calls.splice(0); remote.revoked.splice(0); remote.closed.splice(0)
   remote.advertisedScopes = ['agent.self.read', 'message.write']
   remote.resource = 'https://resource.example/mcp'
+  remote.modern = false
 })
 
 async function fixture() {
   directory = await mkdtemp(join(tmpdir(), 'mcp-domain-once-'))
   const stateRoot = join(directory, 'encrypted-state')
   const config = join(directory, 'cordis.yml')
-  await writeFile(config, '- name: \'@fixture/domain-owner\'\n- name: \'@deepseek-ai/dsh-mcp-client/domain\'\n  config: { enabled: true, approvalWaitMs: 0 }\n')
+  const connector = { enabled: true, approvalWaitMs: 0, trustedToolAnnotationOrigins: ['https://resource.example'] }
+  await writeFile(config, `- name: '@fixture/domain-owner'\n- name: '@deepseek-ai/dsh-mcp-client/domain'\n  config: ${JSON.stringify(connector)}\n`)
   const records = new Map<CredentialKey, CredentialRecord>()
   const approvals: Array<{ requestId: string; purpose: string; body: string }> = []
   const grants = new Map<string, string>()
@@ -151,7 +157,7 @@ async function fixture() {
     const entry = [...ctx.loader.entries()].find(value => value.options.name === '@deepseek-ai/dsh-mcp-client/domain')
     if (!entry?.fiber) throw new Error('Missing domain connector fiber')
     await entry.fiber.dispose()
-    await ctx.loader.create({ name: '@deepseek-ai/dsh-mcp-client/domain', config: { enabled: true, approvalWaitMs: 0 } })
+    await ctx.loader.create({ name: '@deepseek-ai/dsh-mcp-client/domain', config: connector })
     await ctx.loader.await()
   }
   let serial = 0
@@ -216,7 +222,8 @@ it('rejects fabricated operation references before requesting consent or acquiri
   expect(remote.tokens).toHaveLength(0)
   expect(remote.calls).toHaveLength(0)
 })
-it('uses saved write permission without dialogs, then blocks revocation before acquiring another token', async () => {
+it.each([false, true])('uses saved write permission and blocks revocation on the modern=%s wire', async (modern) => {
+  remote.modern = modern
   const host = await fixture(); host.policy.set('write', 'allow')
   const elevated = await host.connect(['message.write'])
   expect(elevated.value).toMatchObject({ ok: true, mode: 'one-shot-discovery' })

@@ -29,6 +29,8 @@ export interface Config {
   maxConnections: number
   /** Explicit public-only direct egress, without per-domain NO_PROXY entries. */
   publicDirectHttps: boolean
+  /** Exact HTTPS resource origins whose tool annotations the Host trusts. */
+  trustedToolAnnotationOrigins?: string[]
   /** Maximum owner wait per exact operation. */
   approvalWaitMs: number
   /** Pending-decision polling interval. */
@@ -45,6 +47,7 @@ export interface Config {
 /** Validate Host configuration before registering tools. */
 export const Config: z<Config> = z.object({
   enabled: z.boolean().default(false), publicDirectHttps: z.boolean().default(false),
+  trustedToolAnnotationOrigins: z.array(z.string()).max(128).default([]),
   maxConnections: z.number().step(1).min(1).max(128).default(32),
   approvalWaitMs: z.number().step(1).min(0).max(600000).default(120000),
   approvalPollMs: z.number().step(1).min(10).max(10000).default(1000),
@@ -137,6 +140,10 @@ interface DiscoveredOperation { binding: Binding; target: OneShotMcpTarget; tool
  */
 export function apply(ctx: Context, config: Config): void {
   if (!config.enabled) return
+  const trustedAnnotationOrigins = new Set(config.trustedToolAnnotationOrigins ?? [])
+  for (const origin of trustedAnnotationOrigins) {
+    if (machineUrl(origin).origin !== origin) throw new DomainConnectionError('invalid_target')
+  }
   const credentials = ctx.get('credentials')
   if (!credentials) throw new DomainConnectionError('credential_store_unavailable')
   const lane = config.publicDirectHttps ? { fetch: directPublicMachineFetch, assertRoute: (url: string) => { machineUrl(url) } } : undefined
@@ -190,6 +197,7 @@ export function apply(ctx: Context, config: Config): void {
       discoveryOrigin: domainOrigin(domain), destinations: [new URL(target.target.resource).origin],
     })
     return new McpDomainConsent({ resource:target.target.resource,issuer:target.target.issuer,scopes:target.scopes,
+      trustToolAnnotations: trustedAnnotationOrigins.has(new URL(target.target.resource).origin),
       policy,target:registered,approvalWaitMs:config.approvalWaitMs,approvalPollMs:config.approvalPollMs,signal,consent,
       assertActive:async()=>{await assertBinding(identity,binding,signal);await assertConnection?.()},send:fetchPublic })
   }

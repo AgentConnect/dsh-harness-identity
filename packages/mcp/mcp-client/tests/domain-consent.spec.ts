@@ -23,7 +23,14 @@ function tool(name = 'write', annotations?: GateInput['tool']['annotations']): G
   return { name, ...(annotations === undefined ? {} : { annotations }) }
 }
 
-async function fixture(options: { waitMs?: number; holdSend?: boolean; sendError?: Error; scopes?: string[]; resource?: string } = {}) {
+async function fixture(options: {
+  waitMs?: number
+  holdSend?: boolean
+  sendError?: Error
+  scopes?: string[]
+  resource?: string
+  trustToolAnnotations?: boolean
+} = {}) {
   const ctx = new Context(); roots.push(ctx)
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(Tools)
@@ -64,6 +71,7 @@ async function fixture(options: { waitMs?: number; holdSend?: boolean; sendError
   }
   const endpoint = options.resource ?? resource
   const guard = new McpDomainConsent({ resource: endpoint, issuer: 'https://issuer.example', scopes: options.scopes ?? ['protocol.read'],
+    trustToolAnnotations: options.trustToolAnnotations ?? true,
     policy: policy.client, target: policy.client.register({ discoveryOrigin: 'https://website.example', destinations: [new URL(endpoint).origin] }),
     approvalWaitMs: options.waitMs ?? 1000, approvalPollMs: 10, signal: lifetime.signal, consent, assertActive, send })
   ctx.effect(() => () =>{  guard.dispose() })
@@ -283,4 +291,14 @@ it('binds the full business envelope except for generated RPC ids and session he
     await expect(f.guard.withWireCall('write',{},new AbortController().signal,false,async()=>{},async()=>f.guard.fetch(new Request(resource,{ method:'POST',headers:{ 'content-type':'application/json' },body:JSON.stringify(message) })))).rejects.toThrow('operation_mismatch')
   }
   expect(f.physical).toEqual([])
+})
+
+it('requires exact confirmation for a read annotation from an untrusted server', async () => {
+  const f = await fixture({ trustToolAnnotations: false })
+  const run = f.run(tool('read', { readOnlyHint: true, destructiveHint: false }))
+  await f.requestStarted
+  expect(f.physical).toHaveLength(0)
+  f.approve()
+  expect((await run).isError).toBe(false)
+  expect(f.physical).toHaveLength(1)
 })

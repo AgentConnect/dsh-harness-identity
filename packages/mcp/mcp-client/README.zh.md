@@ -191,6 +191,8 @@ Identity 的“协议管理”控制读写和精确域名白名单，分别检�
 
 单次连接状态保持加密，密钥保存在 Host 受保护凭据记录中；本地断开后仍保留已发送 bearer 的历史。域名级 redactor 在后续模型输出前恢复历史，跨重启也生效；密钥缺失或历史损坏时拒绝继续。自动清理历史暂不实现，`maxOneShotRecords` 默认 512、上限 4096，达到上限就拒绝进一步获取凭据，不丢弃仍相关的历史。用户确认等待 `approvalWaitMs` 默认 120000 ms，轮询 `approvalPollMs` 默认 1000 ms，单次 SDK 阶段预算 `oneShotTimeoutMs` 默认 60000 ms，发现操作有效期 `operationRefTtlMs` 默认 300000 ms，实时引用上限 `maxDiscoveredOperations` 默认 256。引用过期或操作声明变更后必须重新发现。原显式服务器实例不会隐式切换到这套域名策略。
 
+Host 可在 `trustedToolAnnotationOrigins` 中列出明确受信的 HTTPS 资源 Origin，以信任其工具注解。默认列表为空，远端注解不具有授权效力，业务调用须由所有者确认。已有拒绝规则仍然生效。发送获准的工具及参数前，连接器按协商的协议版本校验 SDK 生成的协议元数据。
+
 Identity 管理器通过 `protocol_permissions`、`identity_settings` 让 Agent 在所有者确认后修改共享配置。默认身份准入版本变化后，新的显式域名连接会关闭旧 SDK／工具，并替换该连接拥有的资源和提示贡献；旧请求仍受边界约束。持久断开、无法读取或已隔离的凭据历史仍阻止自动重新启用。
 
 <a id="model-experience"></a>
